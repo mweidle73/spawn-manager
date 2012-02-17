@@ -52,10 +52,11 @@ package body Spawn.Pool is
    type Socket_Handle is access Anet.Sockets.Socket_Type;
 
    function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
+     (Socket  : Socket_Handle;
+      Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array;
-   --  Send given data as request to spawn manager. Return data of received
-   --  reply.
+   --  Send given data as request to spawn manager using the specified socket.
+   --  Return data of received reply.
 
    procedure Free is new Ada.Unchecked_Deallocation
      (Object => Anet.Sockets.Socket_Type,
@@ -69,6 +70,11 @@ package body Spawn.Pool is
       Available : Boolean;
    end record;
 
+   procedure Set_Busy
+     (Key     :        Unbounded_String;
+      Element : in out Socket_Container);
+   --  Set state of given socket container to busy.
+
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
       Element_Type => Socket_Container);
@@ -76,15 +82,15 @@ package body Spawn.Pool is
 
    protected Sockets
    is
-      procedure Insert_Socket (S : Socket_Container);
+      procedure Insert_Socket (C : Socket_Container);
       --  Insert new socket into store.
 
-      procedure Get_Socket (S : out Socket_Container);
+      procedure Get_Socket (C : out Socket_Container);
       --  Return non-busy socket container from socket store.
 
       procedure Get_Socket
         (P :     String;
-         S : out Socket_Container);
+         C : out Socket_Container);
       --  Return socket container with given socket path from socket store.
 
       procedure Release_Socket (C : Socket_Container);
@@ -141,7 +147,7 @@ package body Spawn.Pool is
                       Mode   => Anet.Sockets.Stream_Socket);
          Sock.Connect (Path => Socket_Addr);
          Sockets.Insert_Socket
-           (S => (Address   => To_Unbounded_String (Socket_Addr),
+           (C => (Address   => To_Unbounded_String (Socket_Addr),
                   Pid       => Pid,
                   Handle    => Sock,
                   Available => True));
@@ -163,18 +169,24 @@ package body Spawn.Pool is
      (Command   : String;
       Directory : String := Ada.Directories.Current_Directory)
    is
+      Cont    : Socket_Container;
       Reply   : Types.Data_Type;
       Request : constant Types.Data_Type
         := (Command => To_Unbounded_String (Command),
             Dir     => To_Unbounded_String (Directory),
             others  => <>);
    begin
-      pragma Debug (L.Log ("Executing command '" & Command & "'"));
+      Sockets.Get_Socket (C => Cont);
+
+      pragma Debug (L.Log ("Executing command '" & Command & "' using socket "
+        & To_String (Cont.Address)));
 
       Reply := Types.Deserialize
         (Buffer => Send_Receive
-           (Request => Types.Serialize
+           (Socket  => Cont.Handle,
+            Request => Types.Serialize
               (Data => Request)));
+      Sockets.Release_Socket (C => Cont);
 
       if not Reply.Success then
          raise Command_Failed with "Command failed: '" & Command & "'";
@@ -207,41 +219,36 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
+     (Socket  : Socket_Handle;
+      Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array
    is
-      Cont : Socket_Container;
+      Response : Ada.Streams.Stream_Element_Array (1 .. 4);
+      Last_Idx : Ada.Streams.Stream_Element_Offset;
+      Sender   : Anet.Sockets.Sender_Info_Type;
    begin
-      Sockets.Get_Socket (S => Cont);
-      pragma Debug (L.Log ("Sending request using socket "
-        & To_String (Cont.Address)));
-
-      Cont.Handle.Send (Item => Request);
-
-      Receive_Reponse :
-      declare
-         Response : Ada.Streams.Stream_Element_Array (1 .. 4);
-         Last_Idx : Ada.Streams.Stream_Element_Offset;
-         Sender   : Anet.Sockets.Sender_Info_Type;
-      begin
-         Cont.Handle.Receive (Src  => Sender,
-                              Item => Response,
-                              Last => Last_Idx);
-         Sockets.Release_Socket (C => Cont);
-
-         return Response (Response'First .. Last_Idx);
-      end Receive_Reponse;
+      Socket.Send (Item => Request);
+      Socket.Receive (Src  => Sender,
+                      Item => Response,
+                      Last => Last_Idx);
+      return Response (Response'First .. Last_Idx);
    end Send_Receive;
+
+   ----------------------------------------------------------------------
+
+   procedure Set_Busy
+     (Key     :        Unbounded_String;
+      Element : in out Socket_Container)
+   is
+      pragma Unreferenced (Key);
+   begin
+      Element.Available := False;
+   end Set_Busy;
 
    -------------------------------------------------------------------------
 
    protected body Sockets
    is
-
-      procedure Set_Busy
-        (Key     :        Unbounded_String;
-         Element : in out Socket_Container);
-      --  Set state of given socket container to busy.
 
       -------------------------------------------------------------------------
 
@@ -264,7 +271,7 @@ package body Spawn.Pool is
 
       procedure Get_Socket
         (P :     String;
-         S : out Socket_Container)
+         C : out Socket_Container)
       is
          use type SOMP.Cursor;
 
@@ -276,8 +283,8 @@ package body Spawn.Pool is
               & P & "] found";
          end if;
 
-         S := SOMP.Element (Pos);
-         if not S.Available then
+         C := SOMP.Element (Pos);
+         if not C.Available then
             raise Manager_Busy with "Requested manager [" & P
               & "] is not available";
          end if;
@@ -288,14 +295,14 @@ package body Spawn.Pool is
 
       ----------------------------------------------------------------------
 
-      procedure Get_Socket (S : out Socket_Container)
+      procedure Get_Socket (C : out Socket_Container)
       is
          Pos   : SOMP.Cursor := Data.First;
          Found : Boolean     := False;
       begin
          while SOMP.Has_Element (Position => Pos) loop
-            S := SOMP.Element (Position => Pos);
-            if S.Available then
+            C := SOMP.Element (Position => Pos);
+            if C.Available then
                Data.Update_Element (Position => Pos,
                                     Process  => Set_Busy'Access);
                Found := True;
@@ -310,16 +317,16 @@ package body Spawn.Pool is
          end if;
 
          pragma Debug (L.Log ("Found available socket "
-           & To_String (S.Address)));
+           & To_String (C.Address)));
       end Get_Socket;
 
       -------------------------------------------------------------------------
 
-      procedure Insert_Socket (S : Socket_Container)
+      procedure Insert_Socket (C : Socket_Container)
       is
       begin
-         Data.Insert (Key      => S.Address,
-                      New_Item => S);
+         Data.Insert (Key      => C.Address,
+                      New_Item => C);
       end Insert_Socket;
 
       ----------------------------------------------------------------------
@@ -367,17 +374,6 @@ package body Spawn.Pool is
          Free (X => S.Handle);
          Data.Delete (Position => Pos);
       end Remove_Socket;
-
-      ----------------------------------------------------------------------
-
-      procedure Set_Busy
-        (Key     :        Unbounded_String;
-         Element : in out Socket_Container)
-      is
-         pragma Unreferenced (Key);
-      begin
-         Element.Available := False;
-      end Set_Busy;
 
    end Sockets;
 
