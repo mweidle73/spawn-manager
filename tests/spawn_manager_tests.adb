@@ -27,17 +27,10 @@
 --  executable file might be covered by the GNU Public License.
 --
 
-with Ada.Streams;
-with Ada.Strings.Unbounded;
-
-with Anet.Sockets;
-
-with Spawn.Types;
 with Spawn.Pool;
 
 package body Spawn_Manager_Tests is
 
-   use Ada.Strings.Unbounded;
    use Ahven;
    use Spawn;
 
@@ -56,59 +49,15 @@ package body Spawn_Manager_Tests is
 
    procedure Send_Receive
    is
-      use Ada.Streams;
-
-      S   : Anet.Sockets.Socket_Type;
-      Req : constant Types.Data_Type
-        := (Command => To_Unbounded_String ("/bin/true"),
-            others  => <>);
-
-      Invalid : constant Stream_Element_Array (1 .. 1) := (others => 12);
-      Address : constant String := "/tmp/spawn_manager_0";
+      Addr : constant String := "/tmp/spawn_manager_0";
    begin
       Pool.Add_Manager
         (Binary_Cmd  => "spawn_manager",
-         Socket_Addr => Address);
+         Socket_Addr => Addr);
 
-      S.Create (Family => Anet.Sockets.Family_Unix,
-                Mode   => Anet.Sockets.Stream_Socket);
-      S.Connect (Path => "/tmp/spawn_manager_0");
-
-      S.Send (Item => Types.Serialize (Data => Req));
-      declare
-         Data     : Stream_Element_Array (1 .. 128);
-         Last_Idx : Stream_Element_Offset;
-         Sender   : Anet.Sockets.Sender_Info_Type;
-         Response : Types.Data_Type;
-      begin
-         S.Receive (Src  => Sender,
-                    Item => Data,
-                    Last => Last_Idx);
-
-         Response := Types.Deserialize
-           (Buffer => Data (Data'First .. Last_Idx));
-         Assert (Condition => Response.Success,
-                 Message   => "Cmd not successful");
-      end;
-
-      S.Send (Item => Invalid);
-      declare
-         Data     : Stream_Element_Array (1 .. 128);
-         Last_Idx : Stream_Element_Offset;
-         Sender   : Anet.Sockets.Sender_Info_Type;
-         Response : Types.Data_Type;
-      begin
-         S.Receive (Src  => Sender,
-                    Item => Data,
-                    Last => Last_Idx);
-
-         Response := Types.Deserialize
-           (Buffer => Data (Data'First .. Last_Idx));
-         Assert (Condition => not Response.Success,
-                 Message   => "Failure expected");
-      end;
-
-      Pool.Remove_Manager (Socket_Addr => Address);
+      Pool.Execute (Socket_Addr => Addr,
+                    Command     => "/bin/true");
+      Pool.Remove_Manager (Socket_Addr => Addr);
    end Send_Receive;
 
 end Spawn_Manager_Tests;

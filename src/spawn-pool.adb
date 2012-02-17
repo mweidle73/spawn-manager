@@ -166,8 +166,9 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    procedure Execute
-     (Command   : String;
-      Directory : String := Ada.Directories.Current_Directory)
+     (Socket_Addr : String := "";
+      Command     : String;
+      Directory   : String := Ada.Directories.Current_Directory)
    is
       Cont    : Socket_Container;
       Reply   : Types.Data_Type;
@@ -176,7 +177,12 @@ package body Spawn.Pool is
             Dir     => To_Unbounded_String (Directory),
             others  => <>);
    begin
-      Sockets.Get_Socket (C => Cont);
+      if Socket_Addr'Length > 0 then
+         Sockets.Get_Socket (P => Socket_Addr,
+                             C => Cont);
+      else
+         Sockets.Get_Socket (C => Cont);
+      end if;
 
       pragma Debug (L.Log ("Executing command '" & Command & "' using socket "
         & To_String (Cont.Address)));

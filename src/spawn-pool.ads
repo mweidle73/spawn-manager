@@ -48,9 +48,12 @@ package Spawn.Pool is
    --  Remove spawn manager with given socket address from pool.
 
    procedure Execute
-     (Command   : String;
-      Directory : String := Ada.Directories.Current_Directory);
-   --  Execute command in given directory.
+     (Socket_Addr : String := "";
+      Command     : String;
+      Directory   : String := Ada.Directories.Current_Directory);
+   --  Execute command in given directory. If Socket_Addr is specified, the
+   --  command will be executed by the spawn manager listening on the given
+   --  socket.
 
    procedure Cleanup;
    --  Cleanup spawn pool.
