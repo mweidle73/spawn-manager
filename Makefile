@@ -5,8 +5,6 @@ LIBDIR = lib
 OBJDIR = obj
 COVDIR = $(OBJDIR)/cov
 
-DEBUGLOG = $(OBJDIR)/spawn_manager.log
-
 GPR_FILE = gnat/spawn.gpr
 
 all: spawn_lib spawn_manager
@@ -15,7 +13,6 @@ spawn_tests:
 	@gnatmake -P$@ -p
 
 tests: spawn_tests spawn_manager_debug
-	@$(OBJDIR)/spawn_manager /tmp/spawn_manager_0 > $(DEBUGLOG) &
 	@$(OBJDIR)/test_runner
 
 spawn_manager:

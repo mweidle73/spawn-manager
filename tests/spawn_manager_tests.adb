@@ -33,6 +33,7 @@ with Ada.Strings.Unbounded;
 with Anet.Sockets;
 
 with Spawn.Types;
+with Spawn.Pool;
 
 package body Spawn_Manager_Tests is
 
@@ -63,7 +64,12 @@ package body Spawn_Manager_Tests is
             others  => <>);
 
       Invalid : constant Stream_Element_Array (1 .. 1) := (others => 12);
+      Address : constant String := "/tmp/spawn_manager_0";
    begin
+      Pool.Add_Manager
+        (Binary_Cmd  => "spawn_manager",
+         Socket_Addr => Address);
+
       S.Create (Family => Anet.Sockets.Family_Unix,
                 Mode   => Anet.Sockets.Stream_Socket);
       S.Connect (Path => "/tmp/spawn_manager_0");
@@ -102,7 +108,7 @@ package body Spawn_Manager_Tests is
                  Message   => "Failure expected");
       end;
 
-      S.Close;
+      Pool.Remove_Manager (Socket_Addr => Address);
    end Send_Receive;
 
 end Spawn_Manager_Tests;
