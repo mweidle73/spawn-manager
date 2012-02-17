@@ -32,6 +32,9 @@ with Ada.Streams;
 
 package Spawn.Pool is
 
+   Mngr_Binary : constant String := "spawn_manager";
+   --  Default spawn manager binary name/path.
+
    procedure Init (Manager_Count : Positive := 1);
    --  Init pool with given number of spawn managers.
 

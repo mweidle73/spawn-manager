@@ -42,7 +42,6 @@ with Spawn.Utils;
 
 package body Spawn.Pool is
 
-   Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "/tmp/spawn_manager-";
 
    use Ada.Strings.Unbounded;
@@ -132,7 +131,7 @@ package body Spawn.Pool is
               & Utils.Random_String (Len => 8);
          begin
             Args := GNAT.OS_Lib.Argument_String_To_List
-              (Arg_String => Mngr_Bin & " " & Addr);
+              (Arg_String => Mngr_Binary & " " & Addr);
 
             begin
                GNAT.Expect.Non_Blocking_Spawn
@@ -144,7 +143,7 @@ package body Spawn.Pool is
             exception
                when GNAT.Expect.Invalid_Process =>
                   GNAT.OS_Lib.Free (Args);
-                  raise Command_Failed with "Unable to fork " & Mngr_Bin;
+                  raise Command_Failed with "Unable to fork " & Mngr_Binary;
             end;
 
             GNAT.OS_Lib.Free (Args);
