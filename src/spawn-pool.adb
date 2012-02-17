@@ -186,6 +186,14 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   procedure Remove_Manager (Socket_Addr : String)
+   is
+   begin
+      Sockets.Remove_Socket (Path => Socket_Addr);
+   end Remove_Manager;
+
+   -------------------------------------------------------------------------
+
    function Send_Receive
      (Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array

@@ -45,6 +45,9 @@ package Spawn.Pool is
    --  spawn a new manager, Socket_Addr designates the Unix domain socket path
    --  the manager will listen for requests.
 
+   procedure Remove_Manager (Socket_Addr : String);
+   --  Remove spawn manager with given socket address from pool.
+
    procedure Execute
      (Command   : String;
       Directory : String := Ada.Directories.Current_Directory);
