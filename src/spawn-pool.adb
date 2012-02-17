@@ -27,6 +27,7 @@
 --  executable file might be covered by the GNU Public License.
 --
 
+with Ada.Streams;
 with Ada.Containers.Ordered_Maps;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
@@ -49,6 +50,12 @@ package body Spawn.Pool is
    package L renames Spawn.Logger;
 
    type Socket_Handle is access Anet.Sockets.Socket_Type;
+
+   function Send_Receive
+     (Request : Ada.Streams.Stream_Element_Array)
+      return Ada.Streams.Stream_Element_Array;
+   --  Send given data as request to spawn manager. Return data of received
+   --  reply.
 
    procedure Free is new Ada.Unchecked_Deallocation
      (Object => Anet.Sockets.Socket_Type,

@@ -28,7 +28,6 @@
 --
 
 with Ada.Directories;
-with Ada.Streams;
 
 package Spawn.Pool is
 
@@ -59,13 +58,5 @@ package Spawn.Pool is
    Command_Failed    : exception;
    Manager_Not_Found : exception;
    Manager_Busy      : exception;
-
-private
-
-   function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
-      return Ada.Streams.Stream_Element_Array;
-   --  Send given data as request to spawn manager. Return data of received
-   --  reply.
 
 end Spawn.Pool;
