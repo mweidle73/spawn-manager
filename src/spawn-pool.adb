@@ -78,6 +78,9 @@ package body Spawn.Pool is
       procedure Release_Socket (C : Socket_Container);
       --  Release given socket container.
 
+      procedure Remove_Socket (Path : String);
+      --  Remove socket with given path from socket store.
+
       procedure Cleanup;
       --  Cleanup socket store.
    private
@@ -218,13 +221,13 @@ package body Spawn.Pool is
 
       procedure Cleanup
       is
-         E   : Socket_Container;
+         S   : Socket_Container;
          Pos : SOMP.Cursor := Data.First;
       begin
          while SOMP.Has_Element (Position => Pos) loop
-            E := SOMP.Element (Position => Pos);
-            E.Handle.Close;
-            Free (X => E.Handle);
+            S := SOMP.Element (Position => Pos);
+            S.Handle.Close;
+            Free (X => S.Handle);
             SOMP.Next (Position => Pos);
          end loop;
 
@@ -306,6 +309,27 @@ package body Spawn.Pool is
          pragma Debug (L.Log ("Socket " & To_String
            (SOMP.Element (Position => Pos).Address) & " released"));
       end Release_Socket;
+
+      ----------------------------------------------------------------------
+
+      procedure Remove_Socket (Path : String)
+      is
+         use type SOMP.Cursor;
+
+         Pos : SOMP.Cursor := Data.Find (Key => To_Unbounded_String (Path));
+         S   : Socket_Container;
+      begin
+         if Pos = SOMP.No_Element then
+            raise Manager_Not_Found with "Unable to remove manager ["
+              & Path & "] from pool";
+         end if;
+
+         S := SOMP.Element (Pos);
+         S.Handle.Close;
+         Free (X => S.Handle);
+         Data.Delete (Position => Pos);
+      end Remove_Socket;
+
    end Sockets;
 
 end Spawn.Pool;
