@@ -38,6 +38,13 @@ package Spawn.Pool is
    procedure Init (Manager_Count : Positive := 1);
    --  Init pool with given number of spawn managers.
 
+   procedure Add_Manager
+     (Binary_Cmd  : String := Mngr_Binary;
+      Socket_Addr : String);
+   --  Add new spawn manager to pool. Binary_Cmd specifies the command used to
+   --  spawn a new manager, Socket_Addr designates the Unix domain socket path
+   --  the manager will listen for requests.
+
    procedure Execute
      (Command   : String;
       Directory : String := Ada.Directories.Current_Directory);

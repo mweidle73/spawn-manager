@@ -86,6 +86,56 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   procedure Add_Manager
+     (Binary_Cmd  : String := Mngr_Binary;
+      Socket_Addr : String)
+   is
+      use type GNAT.OS_Lib.Process_Id;
+
+      Args : GNAT.OS_Lib.Argument_List_Access;
+      Pid  : GNAT.Expect.Process_Descriptor;
+   begin
+      Args := GNAT.OS_Lib.Argument_String_To_List
+        (Arg_String => Binary_Cmd & " " & Socket_Addr);
+
+      begin
+         GNAT.Expect.Non_Blocking_Spawn
+           (Descriptor  => Pid,
+            Command     => Args (Args'First).all,
+            Args        => Args (Args'First + 1 .. Args'Last),
+            Buffer_Size => 0);
+
+      exception
+         when GNAT.Expect.Invalid_Process =>
+            GNAT.OS_Lib.Free (Args);
+            raise Command_Failed with "Unable to fork manager (using command '"
+              & Mngr_Binary & "')";
+      end;
+
+      GNAT.OS_Lib.Free (Args);
+
+      pragma Debug (L.Log ("Waiting for socket '" & Socket_Addr
+        & "' to become available"));
+      Utils.Wait_For_Socket (Path     => Socket_Addr,
+                             Timespan => 3.0);
+
+      declare
+         Sock : constant Socket_Handle := new Anet.Sockets.Socket_Type;
+      begin
+         Sock.Create (Family => Anet.Sockets.Family_Unix,
+                      Mode   => Anet.Sockets.Stream_Socket);
+         Sock.Connect (Path => Socket_Addr);
+         Sockets.Insert_Socket
+           (S => (Address   => To_Unbounded_String (Socket_Addr),
+                  Pid       => Pid,
+                  Handle    => Sock,
+                  Available => True));
+         pragma Debug (L.Log ("Socket " & Socket_Addr & " ready"));
+      end;
+   end Add_Manager;
+
+   -------------------------------------------------------------------------
+
    procedure Cleanup
    is
    begin
@@ -120,52 +170,13 @@ package body Spawn.Pool is
 
    procedure Init (Manager_Count : Positive := 1)
    is
-      use type GNAT.OS_Lib.Process_Id;
-
-      Args : GNAT.OS_Lib.Argument_List_Access;
    begin
       for M in 1 .. Manager_Count loop
          declare
-            Pid  : GNAT.Expect.Process_Descriptor;
             Addr : constant String := Addr_Base
               & Utils.Random_String (Len => 8);
          begin
-            Args := GNAT.OS_Lib.Argument_String_To_List
-              (Arg_String => Mngr_Binary & " " & Addr);
-
-            begin
-               GNAT.Expect.Non_Blocking_Spawn
-                 (Descriptor  => Pid,
-                  Command     => Args (Args'First).all,
-                  Args        => Args (Args'First + 1 .. Args'Last),
-                  Buffer_Size => 0);
-
-            exception
-               when GNAT.Expect.Invalid_Process =>
-                  GNAT.OS_Lib.Free (Args);
-                  raise Command_Failed with "Unable to fork " & Mngr_Binary;
-            end;
-
-            GNAT.OS_Lib.Free (Args);
-
-            pragma Debug (L.Log ("Waiting for socket '" & Addr
-              & "' to become available"));
-            Utils.Wait_For_Socket (Path     => Addr,
-                                   Timespan => 3.0);
-
-            declare
-               Sock : constant Socket_Handle := new Anet.Sockets.Socket_Type;
-            begin
-               Sock.Create (Family => Anet.Sockets.Family_Unix,
-                            Mode   => Anet.Sockets.Stream_Socket);
-               Sock.Connect (Path => Addr);
-               Sockets.Insert_Socket
-                 (S => (Address   => To_Unbounded_String (Addr),
-                        Pid       => Pid,
-                        Handle    => Sock,
-                        Available => True));
-               pragma Debug (L.Log ("Socket " & Addr & " ready"));
-            end;
+            Add_Manager (Socket_Addr => Addr);
          end;
       end loop;
    end Init;

@@ -65,6 +65,18 @@ package body Spawn_Pool_Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Add_Invalid_Managers
+   is
+   begin
+      Spawn.Pool.Add_Manager (Binary_Cmd  => "nonexistent_mngr",
+                              Socket_Addr => "/tmp/1");
+
+   exception
+      when Spawn.Pool.Command_Failed => null;
+   end Add_Invalid_Managers;
+
+   -------------------------------------------------------------------------
+
    procedure Execute_Bin_False
    is
    begin
@@ -145,6 +157,9 @@ package body Spawn_Pool_Tests is
       T.Add_Test_Routine
         (Routine => Pool_Depleted'Access,
          Name    => "Pool depleted");
+      T.Add_Test_Routine
+        (Routine => Add_Invalid_Managers'Access,
+         Name    => "Add invalid managers");
    end Initialize;
 
    -------------------------------------------------------------------------

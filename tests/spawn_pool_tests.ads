@@ -54,4 +54,7 @@ package Spawn_Pool_Tests is
    procedure Pool_Depleted;
    --  Verify exception handling if pool is depleted.
 
+   procedure Add_Invalid_Managers;
+   --  Test error handling if an exception occurs in Add_Manager procedure.
+
 end Spawn_Pool_Tests;
