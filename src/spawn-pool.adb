@@ -75,6 +75,11 @@ package body Spawn.Pool is
       procedure Get_Socket (S : out Socket_Container);
       --  Return non-busy socket container from socket store.
 
+      procedure Get_Socket
+        (P :     String;
+         S : out Socket_Container);
+      --  Return socket container with given socket path from socket store.
+
       procedure Release_Socket (C : Socket_Container);
       --  Release given socket container.
 
@@ -225,6 +230,12 @@ package body Spawn.Pool is
 
    protected body Sockets
    is
+
+      procedure Set_Busy
+        (Key     :        Unbounded_String;
+         Element : in out Socket_Container);
+      --  Set state of given socket container to busy.
+
       -------------------------------------------------------------------------
 
       procedure Cleanup
@@ -244,24 +255,36 @@ package body Spawn.Pool is
 
       ----------------------------------------------------------------------
 
+      procedure Get_Socket
+        (P :     String;
+         S : out Socket_Container)
+      is
+         use type SOMP.Cursor;
+
+         Pos : constant SOMP.Cursor := Data.Find
+           (Key => To_Unbounded_String (P));
+      begin
+         if Pos = SOMP.No_Element then
+            raise Manager_Not_Found with "No manager with socket path ["
+              & P & "] found";
+         end if;
+
+         S := SOMP.Element (Pos);
+         if not S.Available then
+            raise Manager_Busy with "Requested manager [" & P
+              & "] is not available";
+         end if;
+
+         Data.Update_Element (Position => Pos,
+                              Process  => Set_Busy'Access);
+      end Get_Socket;
+
+      ----------------------------------------------------------------------
+
       procedure Get_Socket (S : out Socket_Container)
       is
          Pos   : SOMP.Cursor := Data.First;
          Found : Boolean     := False;
-
-         procedure Set_Busy
-           (Key     :        Unbounded_String;
-            Element : in out Socket_Container);
-         --  Set state of given socket container to busy.
-
-         procedure Set_Busy
-           (Key     :        Unbounded_String;
-            Element : in out Socket_Container)
-         is
-            pragma Unreferenced (Key);
-         begin
-            Element.Available := False;
-         end Set_Busy;
       begin
          while SOMP.Has_Element (Position => Pos) loop
             S := SOMP.Element (Position => Pos);
@@ -337,6 +360,17 @@ package body Spawn.Pool is
          Free (X => S.Handle);
          Data.Delete (Position => Pos);
       end Remove_Socket;
+
+      ----------------------------------------------------------------------
+
+      procedure Set_Busy
+        (Key     :        Unbounded_String;
+         Element : in out Socket_Container)
+      is
+         pragma Unreferenced (Key);
+      begin
+         Element.Available := False;
+      end Set_Busy;
 
    end Sockets;
 

@@ -58,6 +58,7 @@ package Spawn.Pool is
 
    Command_Failed    : exception;
    Manager_Not_Found : exception;
+   Manager_Busy      : exception;
 
 private
 
