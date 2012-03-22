@@ -171,6 +171,11 @@ begin
                   Args        => Args,
                   Buffer_Size => 0);
 
+               --  Close input fd explicitly, see GNAT tracker ticket L321-030.
+
+               GNAT.OS_Lib.Close (FD => GNAT.Expect.Get_Input_Fd
+                                  (Descriptor => Pd));
+
                begin
                   GNAT.Expect.Expect
                     (Descriptor => Pd,
