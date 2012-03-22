@@ -173,6 +173,11 @@ begin
                pragma Debug (L.Log_File ("Command spawned (pid"
                  & GNAT.Expect.Get_Pid (Descriptor => Pd)'Img & ")"));
 
+               --  Close input fd explicitly, see GNAT tracker ticket L321-030.
+
+               GNAT.OS_Lib.Close (FD => GNAT.Expect.Get_Input_Fd
+                                  (Descriptor => Pd));
+
                begin
                   GNAT.Expect.Expect
                     (Descriptor => Pd,
