@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -150,6 +150,10 @@ package body Spawn.Pool is
             Addr : constant String := Socket_Dir & "/" & Addr_Base
               & Anet.Util.Random_String (Len => 8);
          begin
+            if not Anet.Sockets.Unix.Is_Valid (Path => Addr) then
+               raise Pool_Error with "UNIX path too long '" & Addr & "'";
+            end if;
+
             Args := GNAT.OS_Lib.Argument_String_To_List
               (Arg_String => Mngr_Bin & " " & Addr);
 
