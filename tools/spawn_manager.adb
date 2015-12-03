@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -83,6 +83,9 @@ begin
       return;
    end if;
 
+   pragma Debug (L.Init_Logfile
+                 (Path => Ada.Command_Line.Argument (1) & ".log"));
+
    if not Anet.Sockets.Unix.Is_Valid
      (Path => Ada.Command_Line.Argument (1))
    then
@@ -95,8 +98,6 @@ begin
 
    Sock_Listen.Init;
 
-   pragma Debug (L.Init_Logfile
-                 (Path => Ada.Command_Line.Argument (1) & ".log"));
    declare
       Wrapper        : constant String := Spawn.Utils.Locate_Exec_On_Path
         (Name => "spawn_wrapper");
