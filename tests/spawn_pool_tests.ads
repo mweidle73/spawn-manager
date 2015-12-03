@@ -63,4 +63,7 @@ package Spawn_Pool_Tests is
    procedure Invalid_Socket_Directory;
    --  Verify error behavior with invalid socket directory.
 
+   procedure Invalid_Socket_Path;
+   --  Verify error behavior with invalid (UNIX) socket path.
+
 end Spawn_Pool_Tests;

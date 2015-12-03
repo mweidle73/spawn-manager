@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -31,6 +31,8 @@ with Ada.Text_IO;
 with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Real_Time;
+
+with Anet.Util;
 
 with Spawn.Pool;
 
@@ -266,6 +268,9 @@ package body Spawn_Pool_Tests is
       T.Add_Test_Routine
         (Routine => Invalid_Socket_Directory'Access,
          Name    => "Invalid socket directory");
+      T.Add_Test_Routine
+        (Routine => Invalid_Socket_Path'Access,
+         Name    => "Invalid socket path");
    end Initialize;
 
    -------------------------------------------------------------------------
@@ -278,6 +283,21 @@ package body Spawn_Pool_Tests is
    exception
       when Spawn.Pool.Pool_Error => null;
    end Invalid_Socket_Directory;
+
+   -------------------------------------------------------------------------
+
+   procedure Invalid_Socket_Path
+   is
+      Dir : constant String := "/tmp/" & Anet.Util.Random_String (Len => 128);
+   begin
+      Ada.Directories.Create_Directory
+        (New_Directory => Dir);
+
+      Spawn.Pool.Init (Socket_Dir => Dir);
+
+   exception
+      when Spawn.Pool.Pool_Error => null;
+   end Invalid_Socket_Path;
 
    -------------------------------------------------------------------------
 
