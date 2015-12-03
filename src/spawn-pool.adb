@@ -39,7 +39,6 @@ with Anet.Streams;
 with Anet.Util;
 
 with Spawn.Types;
-with Spawn.Logger;
 
 package body Spawn.Pool is
 
@@ -48,7 +47,7 @@ package body Spawn.Pool is
 
    use Ada.Strings.Unbounded;
 
-   package L renames Spawn.Logger;
+   L : Log_Procedure := null;
 
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
@@ -109,7 +108,7 @@ package body Spawn.Pool is
             Dir     => To_Unbounded_String (Directory),
             others  => <>);
    begin
-      pragma Debug (L.Log ("Executing command '" & Command & "'"));
+      L (Msg => "Executing command '" & Command & "'");
 
       Types.Data_Type'Write (Stream'Access, Request);
 
@@ -133,12 +132,11 @@ package body Spawn.Pool is
       Socket_Dir    : String        := "/tmp";
       Log           : Log_Procedure := No_Log'Access)
    is
-      pragma Unreferenced (Log);
-
       use type GNAT.OS_Lib.Process_Id;
 
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
+      L := Log;
 
       --  Check if socket directory exists
 
@@ -166,7 +164,7 @@ package body Spawn.Pool is
                   Command     => Args (Args'First).all,
                   Args        => Args (Args'First + 1 .. Args'Last),
                   Buffer_Size => 0);
-               pragma Debug (L.Log ("Forked manager " & Addr));
+               L (Msg => "Forked manager " & Addr);
 
             exception
                when GNAT.Expect.Invalid_Process =>
@@ -176,8 +174,8 @@ package body Spawn.Pool is
 
             GNAT.OS_Lib.Free (Args);
 
-            pragma Debug (L.Log ("Waiting for socket '" & Addr
-              & "' to become available"));
+            L (Msg =>  "Waiting for socket '" & Addr
+               & "' to become available");
             Anet.Util.Wait_For_File (Path     => Addr,
                                      Timespan => 3.0);
 
@@ -192,7 +190,7 @@ package body Spawn.Pool is
                         Pid       => Pid,
                         Socket    => Sock,
                         Available => True));
-               pragma Debug (L.Log ("Socket " & Addr & " ready"));
+               L (Msg => "Socket " & Addr & " ready");
             end;
          end;
       end loop;
@@ -209,8 +207,7 @@ package body Spawn.Pool is
       Cont : Socket_Container;
    begin
       Sockets.Get_Socket (S => Cont);
-      pragma Debug (L.Log ("Sending request using socket "
-        & To_String (Cont.Address)));
+      L (Msg => "Sending request using socket " & To_String (Cont.Address));
 
       Cont.Socket.Send (Item => Request);
 
@@ -222,7 +219,7 @@ package body Spawn.Pool is
          Cont.Socket.Receive (Item => Response,
                               Last => Last_Idx);
          if Last_Idx = 0 then
-            pragma Debug (L.Log ("Zero response, connection closed by peer"));
+            L (Msg => "Zero response, connection closed by peer");
             raise Command_Failed with "Zero response, connection closed by"
               & " peer";
          end if;
@@ -262,15 +259,15 @@ package body Spawn.Pool is
 
             exception
                when GNAT.Expect.Process_Died =>
-                  pragma Debug (L.Log ("Manager " & To_String (E.Address)
-                    & " terminated"));
+                  L (Msg => "Manager " & To_String (E.Address)
+                     & " terminated");
                   GNAT.Expect.Close (Descriptor => E.Pid);
             end;
 
             case Match is
                when GNAT.Expect.Expect_Timeout =>
-                  pragma Debug (L.Log ("Timeout occured, KILL manager"
-                    & " " & To_String (E.Address)));
+                  L (Msg => "Timeout occured, KILL manager" & " "
+                     & To_String (E.Address));
                   GNAT.Expect.Close (Descriptor => E.Pid);
                when others => null;
             end case;
@@ -320,8 +317,7 @@ package body Spawn.Pool is
               "No free spawn manager available, increase the pool size";
          end if;
 
-         pragma Debug (L.Log ("Found available socket "
-           & To_String (S.Address)));
+         L (Msg => "Found available socket " & To_String (S.Address));
       end Get_Socket;
 
       -------------------------------------------------------------------------
@@ -355,8 +351,8 @@ package body Spawn.Pool is
       begin
          Data.Update_Element (Position => Pos,
                               Process  => Set_Available'Access);
-         pragma Debug (L.Log ("Socket " & To_String
-           (SOMP.Element (Position => Pos).Address) & " released"));
+         L (Msg => "Socket " & To_String
+            (SOMP.Element (Position => Pos).Address) & " released");
       end Release_Socket;
    end Sockets;
 

@@ -75,7 +75,7 @@ package body Spawn_Pool_Tests is
       Start : Time;
       Span  : Time_Span := To_Time_Span (D => 100.0);
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
 
       begin
          Start := Clock;
@@ -113,7 +113,7 @@ package body Spawn_Pool_Tests is
    procedure Execute_Bin_False
    is
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => "/bin/false");
       Spawn.Pool.Cleanup;
       Fail (Message => "Exception expected");
@@ -131,7 +131,7 @@ package body Spawn_Pool_Tests is
    procedure Execute_Bin_True
    is
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => "/bin/true");
       Spawn.Pool.Cleanup;
 
@@ -149,7 +149,7 @@ package body Spawn_Pool_Tests is
       Cmd  : constant String := "dd if=/dev/zero bs=1 count=1 of=" & File
         & " > /dev/null 2>&1";
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => Cmd);
       Spawn.Pool.Cleanup;
 
@@ -169,7 +169,7 @@ package body Spawn_Pool_Tests is
    procedure Execute_Nonexistent
    is
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
 
       begin
          Spawn.Pool.Execute (Command => "nonexistent/binary");
@@ -214,7 +214,7 @@ package body Spawn_Pool_Tests is
       end Executor;
 
    begin
-      Spawn.Pool.Init;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
       Executor.Start;
 
       delay 0.3;
@@ -278,7 +278,8 @@ package body Spawn_Pool_Tests is
    procedure Invalid_Socket_Directory
    is
    begin
-      Spawn.Pool.Init (Socket_Dir => "/nonexistent/nonexistent");
+      Spawn.Pool.Init (Socket_Dir => "/nonexistent/nonexistent",
+                       Log        => Ada.Text_IO.Put_Line'Access);
       Fail (Message => "Exception expected");
 
    exception
@@ -294,7 +295,8 @@ package body Spawn_Pool_Tests is
       Ada.Directories.Create_Directory
         (New_Directory => Dir);
 
-      Spawn.Pool.Init (Socket_Dir => Dir);
+      Spawn.Pool.Init (Socket_Dir => Dir,
+                       Log        => Ada.Text_IO.Put_Line'Access);
       Fail (Message => "Exception expected");
 
    exception
@@ -309,7 +311,8 @@ package body Spawn_Pool_Tests is
       Task_Array : array (1 .. 4) of Executor;
       Result     : Boolean := True;
    begin
-      Spawn.Pool.Init (Manager_Count => 4);
+      Spawn.Pool.Init (Manager_Count => 4,
+                       Log           => Ada.Text_IO.Put_Line'Access);
       for T in Task_Array'Range loop
          Task_Array (T).Call;
       end loop;
@@ -341,7 +344,8 @@ package body Spawn_Pool_Tests is
       Task_Array : array (1 .. 8) of Executor;
       Result     : Boolean := True;
    begin
-      Spawn.Pool.Init (Manager_Count => 4);
+      Spawn.Pool.Init (Manager_Count => 4,
+                       Log           => Ada.Text_IO.Put_Line'Access);
 
       for T in Task_Array'Range loop
          Task_Array (T).Call;
