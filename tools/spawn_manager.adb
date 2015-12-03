@@ -89,6 +89,8 @@ begin
    if not Anet.Sockets.Unix.Is_Valid
      (Path => Ada.Command_Line.Argument (1))
    then
+      pragma Debug (L.Log_File ("UNIX path too long '"
+                    & Ada.Command_Line.Argument (1) & "'"));
       Ada.Command_Line.Set_Exit_Status (Code => Ada.Command_Line.Failure);
       return;
    end if;
