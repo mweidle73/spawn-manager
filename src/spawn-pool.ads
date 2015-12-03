@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -32,12 +32,18 @@ with Ada.Streams;
 
 package Spawn.Pool is
 
+   type Log_Procedure is access procedure (Msg : String);
+
+   procedure No_Log (Msg : String) is null;
+
    procedure Init
-     (Manager_Count : Positive := 1;
-      Socket_Dir    : String   := "/tmp");
+     (Manager_Count : Positive      := 1;
+      Socket_Dir    : String        := "/tmp";
+      Log           : Log_Procedure := No_Log'Access);
    --  Init pool with given number of spawn managers. The Socket_Dir argument
    --  specifies the directory used to store spawn_manager communication
-   --  sockets.
+   --  sockets and the optional log procedure will be used to log additional
+   --  runtime information.
 
    procedure Execute
      (Command   : String;
