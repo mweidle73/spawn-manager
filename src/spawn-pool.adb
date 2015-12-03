@@ -129,9 +129,12 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    procedure Init
-     (Manager_Count : Positive := 1;
-      Socket_Dir    : String   := "/tmp")
+     (Manager_Count : Positive      := 1;
+      Socket_Dir    : String        := "/tmp";
+      Log           : Log_Procedure := No_Log'Access)
    is
+      pragma Unreferenced (Log);
+
       use type GNAT.OS_Lib.Process_Id;
 
       Args : GNAT.OS_Lib.Argument_List_Access;
