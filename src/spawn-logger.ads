@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -27,12 +27,7 @@
 --  executable file might be covered by the GNU Public License.
 --
 
-with Ada.Text_IO;
-
 package Spawn.Logger is
-
-   procedure Log (Message : String) renames Ada.Text_IO.Put_Line;
-   --  Log given message to console.
 
    procedure Log_File (Message : String);
    --  Log given message to file.
