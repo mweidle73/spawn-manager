@@ -9,6 +9,8 @@ GPR_FILE = gnat/spawn.gpr
 
 CFLAGS = -W -Wall -Werror -O3
 
+BUILD_TYPE = prod
+
 all: spawn_lib spawn_manager
 
 spawn_tests:
@@ -19,7 +21,7 @@ tests: spawn_tests spawn_manager
 	@$(OBJDIR)/test_runner
 
 spawn_manager: $(OBJDIR)/spawn_wrapper
-	@gnatmake -P$@ -p
+	@gnatmake -P$@ -p -XBUILD=$(BUILD_TYPE)
 
 spawn_manager_debug: $(OBJDIR)/spawn_wrapper
 	@gnatmake -Pspawn_manager -p -XBUILD="debug"
