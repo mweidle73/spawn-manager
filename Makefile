@@ -23,9 +23,6 @@ tests: spawn_tests spawn_manager
 spawn_manager: $(OBJDIR)/spawn_wrapper
 	@gnatmake -P$@ -p -XBUILD=$(BUILD_TYPE)
 
-spawn_manager_debug: $(OBJDIR)/spawn_wrapper
-	@gnatmake -Pspawn_manager -p -XBUILD="debug"
-
 spawn_performance:
 	@gnatmake -P$@ -p
 
