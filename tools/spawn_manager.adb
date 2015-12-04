@@ -43,6 +43,7 @@ with Spawn.Types;
 with Spawn.Utils;
 with Spawn.Logger;
 with Spawn.Signals;
+with Spawn.Version;
 
 procedure Spawn_Manager
 is
@@ -85,6 +86,8 @@ begin
 
    pragma Debug (L.Init_Logfile
                  (Path => Ada.Command_Line.Argument (1) & ".log"));
+   pragma Debug (L.Log_File (Message => "Starting Spawn Manager (version "
+                             & Spawn.Version.Version_String & ")"));
 
    if not Anet.Sockets.Unix.Is_Valid
      (Path => Ada.Command_Line.Argument (1))
