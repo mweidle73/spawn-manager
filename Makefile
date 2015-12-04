@@ -68,5 +68,4 @@ clean:
 	@rm -rf $(LIBDIR)
 	@$(MAKE) -C doc clean
 
-.PHONY: clean cov doc install install_lib install_manager perf spawn_lib \
-	spawn_performance spawn_manager spawn_manager_debug spawn_tests tests
+.PHONY: doc perf tests
