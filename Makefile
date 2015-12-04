@@ -5,6 +5,10 @@ LIBDIR = lib
 OBJDIR = obj
 COVDIR = $(OBJDIR)/cov
 
+VERSION_SPEC := src/spawn-version.ads
+VERSION       = $(shell cat .version | sed 's/^v//')
+GIT_REV      := $(shell git describe --always 2> /dev/null)
+
 GPR_FILE = gnat/spawn.gpr
 
 CFLAGS = -W -Wall -Werror -O3
@@ -13,6 +17,23 @@ BUILD_TYPE = prod
 
 all: spawn_lib spawn_manager
 
+.version: FORCE
+	@if [ -d .git -o -f .git ]; then \
+		if [ -r $@ ]; then \
+			if [ "$$(cat $@)" != "$(GIT_REV)" ]; then \
+				echo $(GIT_REV) > $@; \
+			fi; \
+		else \
+			echo $(GIT_REV) > $@; \
+		fi \
+	fi
+
+$(VERSION_SPEC): .version
+	@echo "package Spawn.Version is"                > $@
+	@echo "   Version_String : constant String :=" >> $@
+	@echo "     \"$(VERSION)\";"                   >> $@
+	@echo "end Spawn.Version;"                     >> $@
+
 spawn_tests:
 	@gnatmake -P$@ -p
 
@@ -20,7 +41,7 @@ tests: spawn_tests spawn_manager
 	@$(OBJDIR)/spawn_manager $(OBJDIR)/spawn_manager_0 &
 	@$(OBJDIR)/test_runner
 
-spawn_manager: $(OBJDIR)/spawn_wrapper
+spawn_manager: $(VERSION_SPEC) $(OBJDIR)/spawn_wrapper
 	@gnatmake -P$@ -p -XBUILD=$(BUILD_TYPE)
 
 spawn_performance:
@@ -67,5 +88,7 @@ clean:
 	@rm -rf $(OBJDIR)
 	@rm -rf $(LIBDIR)
 	@$(MAKE) -C doc clean
+
+FORCE:
 
 .PHONY: doc perf tests
