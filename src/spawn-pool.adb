@@ -128,9 +128,10 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    procedure Init
-     (Manager_Count : Positive      := 1;
-      Socket_Dir    : String        := "/tmp";
-      Log           : Log_Procedure := No_Log'Access)
+     (Manager_Count  : Positive      := 1;
+      Socket_Dir     : String        := "/tmp";
+      Socket_Timeout : Duration      := 3.0;
+      Log            : Log_Procedure := No_Log'Access)
    is
       use type GNAT.OS_Lib.Process_Id;
 
@@ -177,7 +178,7 @@ package body Spawn.Pool is
             L (Msg =>  "Waiting for socket '" & Addr
                & "' to become available");
             Anet.Util.Wait_For_File (Path     => Addr,
-                                     Timespan => 3.0);
+                                     Timespan => Socket_Timeout);
 
             declare
                Sock : constant Socket_Handle
