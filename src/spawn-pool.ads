@@ -71,4 +71,10 @@ private
    --  Send given data as request to spawn manager. Return data of received
    --  reply.
 
+   L : Log_Procedure := null;
+   --  Log procedure.
+
+   procedure Log_A_File (Filename : String);
+   --  Log the contents of the specified file.
+
 end Spawn.Pool;
