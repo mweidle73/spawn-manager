@@ -27,6 +27,7 @@
 --  executable file might be covered by the GNU Public License.
 --
 
+with Ada.Text_IO;
 with Ada.Command_Line;
 with Ada.Strings.Unbounded;
 with Ada.Directories;
@@ -66,6 +67,23 @@ is
    procedure Send_Reply (Success : Boolean);
    --  Send reply message indicating success or failure.
 
+   procedure Print_Usage (Msg : String);
+   --  Print given message and client usage to stdout.
+
+   -------------------------------------------------------------------------
+
+   procedure Print_Usage (Msg : String)
+   is
+      use Ada.Command_Line;
+   begin
+      Ada.Text_IO.Put_Line
+        (Item => "Spawn Manager, version " & Spawn.Version.Version_String);
+      Ada.Text_IO.Put_Line (Item => "Invalid arguments: " & Msg);
+      Ada.Text_IO.Put_Line (Item => "Usage: " & Command_Name & " <socket>");
+   end Print_Usage;
+
+   -------------------------------------------------------------------------
+
    procedure Send_Reply (Success : Boolean)
    is
       Reply : constant Spawn.Types.Data_Type
@@ -77,9 +95,9 @@ is
       Sock_Comm.Send (Item => Stream.Get_Buffer);
       pragma Debug (L.Log_File ("Reply sent [" & Success'Img & "]"));
    end Send_Reply;
-
 begin
    if Ada.Command_Line.Argument_Count /= 1 then
+      Print_Usage (Msg => "No socket path given");
       Ada.Command_Line.Set_Exit_Status (Code => Ada.Command_Line.Failure);
       return;
    end if;
