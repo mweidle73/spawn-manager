@@ -21,8 +21,8 @@ implement fast and simple IPC.
 Licence
 -------
 --------------------------------------------------------------------------------
-Copyright (C) 2012 secunet Security Networks AG
-Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
+Copyright (C) 2012, 2015 secunet Security Networks AG
+Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
 
 Free use of this software is granted under the terms of the GNAT Modified
 General Public License (GMGPL).
@@ -30,15 +30,7 @@ General Public License (GMGPL).
 
 Download
 --------
-
-Release version
-~~~~~~~~~~~~~~~
-No releases yet, stay tuned.
-
-Development version
-~~~~~~~~~~~~~~~~~~~
-The current development version of the spawn manager is available through its git
-repository:
+The Spawn Manager sources are available through its git repository:
 
   $ git clone http://git.codelabs.ch/git/spawn-manager.git
 
