@@ -36,7 +36,7 @@ with Anet.Util;
 
 with Spawn.Pool;
 
-package body Spawn_Pool_Tests is
+package body Spawn.Pool.Tests is
 
    use Ahven;
 
@@ -370,4 +370,4 @@ package body Spawn_Pool_Tests is
          raise;
    end Pool_Depleted;
 
-end Spawn_Pool_Tests;
+end Spawn.Pool.Tests;
