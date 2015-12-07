@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -29,7 +29,7 @@
 
 with Ahven.Framework;
 
-package Spawn_Pool_Tests is
+package Spawn.Pool.Tests is
 
    type Testcase is new Ahven.Framework.Test_Case with null record;
 
@@ -66,4 +66,4 @@ package Spawn_Pool_Tests is
    procedure Invalid_Socket_Path;
    --  Verify error behavior with invalid (UNIX) socket path.
 
-end Spawn_Pool_Tests;
+end Spawn.Pool.Tests;

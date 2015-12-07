@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012 secunet Security Networks AG
+--  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012, 2015 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -32,9 +32,10 @@ with Ahven.Framework;
 
 with Spawn.Utils;
 
-with Spawn_Pool_Tests;
 with Spawn_Utils_Tests;
 with Spawn_Manager_Tests;
+
+with Spawn.Pool.Tests;
 
 procedure Test_Runner is
    use Ahven.Framework;
@@ -45,11 +46,11 @@ begin
    Spawn.Utils.Expand_Search_Path (Cmd_Path => "obj/spawn_manager");
 
    Add_Test (Suite => S.all,
-             T     => new Spawn_Pool_Tests.Testcase);
-   Add_Test (Suite => S.all,
              T     => new Spawn_Utils_Tests.Testcase);
    Add_Test (Suite => S.all,
              T     => new Spawn_Manager_Tests.Testcase);
+   Add_Test (Suite => S.all,
+             T     => new Spawn.Pool.Tests.Testcase);
 
    Ahven.Text_Runner.Run (Suite => S);
    Release_Suite (T => S);
