@@ -31,6 +31,7 @@ with Ada.Text_IO;
 with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Real_Time;
+with Ada.Strings.Unbounded;
 
 with Anet.Util;
 
@@ -65,6 +66,16 @@ package body Spawn.Pool.Tests is
          Success := not Got_Exception;
       end Done;
    end Executor;
+
+   Test_Buffer : Ada.Strings.Unbounded.Unbounded_String;
+
+   procedure Test_Log (Msg : String);
+   --  Append message to test buffer.
+
+   Test_Log_Exception : exception;
+
+   procedure Test_Log_Error (Msg : String);
+   --  Just raises a test exception.
 
    -------------------------------------------------------------------------
 
@@ -271,6 +282,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Invalid_Socket_Path'Access,
          Name    => "Invalid socket path");
+      T.Add_Test_Routine
+        (Routine => Log_A_File'Access,
+         Name    => "Log file contents");
    end Initialize;
 
    -------------------------------------------------------------------------
@@ -303,6 +317,41 @@ package body Spawn.Pool.Tests is
       when Spawn.Pool.Pool_Error =>
          Ada.Directories.Delete_Directory (Directory => Dir);
    end Invalid_Socket_Path;
+
+   -------------------------------------------------------------------------
+
+   procedure Log_A_File
+   is
+      use Ada.Strings.Unbounded;
+
+      Lf : constant String := "data/log_contents";
+
+      Ref_Buffer : constant String :=
+        Lf & ": this is a test" & ASCII.LF &
+        Lf & ": log file" & ASCII.LF;
+   begin
+      L := Test_Log'Access;
+      Log_A_File (Filename => Lf);
+      Assert (Condition => Test_Buffer = Ref_Buffer,
+              Message   => "Buffer mismatch: '"
+              & To_String (Test_Buffer) & "'");
+
+      begin
+         L := Test_Log_Error'Access;
+         Log_A_File (Filename => Lf);
+         Fail (Message => "Exception expected");
+
+      exception
+         when Test_Log_Exception => null;
+      end;
+
+      L := null;
+
+   exception
+      when others =>
+         L := null;
+         raise;
+   end Log_A_File;
 
    -------------------------------------------------------------------------
 
@@ -372,5 +421,22 @@ package body Spawn.Pool.Tests is
          Spawn.Pool.Cleanup;
          raise;
    end Pool_Depleted;
+
+   -------------------------------------------------------------------------
+
+   procedure Test_Log (Msg : String)
+   is
+      use type Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      Test_Buffer := Test_Buffer & Msg & ASCII.LF;
+   end Test_Log;
+
+   -------------------------------------------------------------------------
+
+   procedure Test_Log_Error (Msg : String)
+   is
+   begin
+      raise Test_Log_Exception;
+   end Test_Log_Error;
 
 end Spawn.Pool.Tests;

@@ -66,4 +66,7 @@ package Spawn.Pool.Tests is
    procedure Invalid_Socket_Path;
    --  Verify error behavior with invalid (UNIX) socket path.
 
+   procedure Log_A_File;
+   --  Test Log_A_File procedure;
+
 end Spawn.Pool.Tests;

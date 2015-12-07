@@ -27,7 +27,9 @@
 --  executable file might be covered by the GNU Public License.
 --
 
+with Ada.Text_IO;
 with Ada.Containers.Ordered_Maps;
+with Ada.Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
@@ -46,8 +48,6 @@ package body Spawn.Pool is
    Addr_Base : constant String := "spawn_manager-";
 
    use Ada.Strings.Unbounded;
-
-   L : Log_Procedure := null;
 
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
@@ -192,10 +192,47 @@ package body Spawn.Pool is
                         Socket    => Sock,
                         Available => True));
                L (Msg => "Socket " & Addr & " ready");
+            exception
+               when others =>
+                  Log_A_File (Filename => Addr & ".log");
+                  raise;
             end;
          end;
       end loop;
    end Init;
+
+   -------------------------------------------------------------------------
+
+   procedure Log_A_File (Filename : String)
+   is
+      Log_File : Ada.Text_IO.File_Type;
+   begin
+      if not Ada.Directories.Exists (Name => Filename) then
+         L (Msg => "Unable to log contents of nonexistent file '"
+            & Filename & "' - non-debug build?");
+         return;
+      end if;
+
+      Ada.Text_IO.Open
+        (File => Log_File,
+         Mode => Ada.Text_IO.In_File,
+         Name => Filename,
+         Form => "shared=no");
+
+      while not Ada.Text_IO.End_Of_File (File => Log_File) loop
+         L (Msg => Filename & ": " & Ada.Text_IO.Get_Line (File => Log_File));
+      end loop;
+
+      Ada.Text_IO.Close (File => Log_File);
+
+   exception
+      when E : others =>
+         if Ada.Text_IO.Is_Open (File => Log_File) then
+            Ada.Text_IO.Close (File => Log_File);
+         end if;
+         L (Msg => "Error logging file contents '"
+            & Filename & "': " & Ada.Exceptions.Exception_Message (X => E));
+   end Log_A_File;
 
    -------------------------------------------------------------------------
 
@@ -229,6 +266,11 @@ package body Spawn.Pool is
 
          return Response (Response'First .. Last_Idx);
       end Receive_Reponse;
+
+   exception
+      when others =>
+         Log_A_File (Filename => To_String (Cont.Address & ".log"));
+         raise;
    end Send_Receive;
 
    -------------------------------------------------------------------------
