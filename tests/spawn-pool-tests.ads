@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012, 2015 secunet Security Networks AG
+--  Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012-2016 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -68,5 +68,9 @@ package Spawn.Pool.Tests is
 
    procedure Log_A_File;
    --  Test Log_A_File procedure;
+
+   procedure Connect_Retry_On_Refused;
+   --  Verify behavior of retry logic if connection fails with connection
+   --  refused error.
 
 end Spawn.Pool.Tests;

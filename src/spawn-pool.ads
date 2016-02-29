@@ -31,6 +31,8 @@ with Ada.Directories;
 with Ada.Streams;
 with Ada.Unchecked_Deallocation;
 
+with Anet.Sockets.Unix;
+
 package Spawn.Pool is
 
    type Log_Procedure is access procedure (Msg : String);
@@ -61,8 +63,9 @@ package Spawn.Pool is
    procedure Cleanup;
    --  Cleanup spawn pool.
 
-   Pool_Error     : exception;
-   Command_Failed : exception;
+   Pool_Error         : exception;
+   Command_Failed     : exception;
+   Connection_Refused : exception;
 
 private
 
@@ -84,5 +87,15 @@ private
      (Object => Anet.Sockets.Unix.TCP_Socket_Type,
       Name   => Socket_Handle);
    --  Free allocated socket memory.
+
+   procedure Connect_Retry_On_Refused
+     (Socket : Socket_Handle;
+      Path   : Anet.Sockets.Unix.Path_Type;
+      Count  : Positive);
+   --  Try to connect to socket. If the socket responds with connection
+   --  refused, sleep one second and retry. This might happen if the manager
+   --  created the socket but is not yet ready to accept connections.
+   --  Raises custom Connection_Refused exception if socket refuses connection
+   --  after Count tries.
 
 end Spawn.Pool;

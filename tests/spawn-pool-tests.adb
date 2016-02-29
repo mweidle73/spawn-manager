@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012, 2015 secunet Security Networks AG
+--  Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012-2016 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -118,6 +118,57 @@ package body Spawn.Pool.Tests is
          Spawn.Pool.Cleanup;
          raise;
    end Command_Timeout;
+
+   -------------------------------------------------------------------------
+
+   procedure Connect_Retry_On_Refused
+   is
+      S : Socket_Handle
+        := new Anet.Sockets.Unix.TCP_Socket_Type;
+      P : constant Anet.Sockets.Unix.Path_Type
+        := Anet.Sockets.Unix.Path_Type
+          ("/tmp/spawn.retry-" & Anet.Util.Random_String (Len => 12));
+   begin
+
+      --  Negative test.
+
+      S.Init;
+
+      --  Socket error, but not connection refused.
+
+      begin
+         Connect_Retry_On_Refused (Socket => S,
+                                   Path   => P,
+                                   Count  => 2);
+         Fail (Message => "Exception expected");
+
+      exception
+         when Anet.Sockets.Socket_Error => null;
+      end;
+
+      S.Bind (Path => P);
+
+      --  Connection refused error.
+
+      begin
+         Connect_Retry_On_Refused (Socket => S,
+                                   Path   => P,
+                                   Count  => 2);
+         Fail (Message => "Exception expected");
+
+      exception
+         when Connection_Refused => null;
+      end;
+
+      Free (X => S);
+      Spawn.Pool.Cleanup;
+
+   exception
+      when others =>
+         Free (X => S);
+         Spawn.Pool.Cleanup;
+         raise;
+   end Connect_Retry_On_Refused;
 
    -------------------------------------------------------------------------
 
@@ -285,6 +336,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Log_A_File'Access,
          Name    => "Log file contents");
+      T.Add_Test_Routine
+        (Routine => Connect_Retry_On_Refused'Access,
+         Name    => "Retry connect on connection refused");
    end Initialize;
 
    -------------------------------------------------------------------------
