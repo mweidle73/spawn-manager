@@ -130,6 +130,10 @@ package body Spawn.Pool.Tests is
           ("/tmp/spawn.retry-" & Anet.Util.Random_String (Len => 12));
    begin
 
+      --  Positive test, calls Connect_Retry_On_Refused on 'real' manager.
+
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+
       --  Negative test.
 
       S.Init;
