@@ -29,6 +29,7 @@
 
 with Ada.Directories;
 with Ada.Streams;
+with Ada.Unchecked_Deallocation;
 
 package Spawn.Pool is
 
@@ -78,5 +79,10 @@ private
    --  Log the contents of the specified file.
 
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Object => Anet.Sockets.Unix.TCP_Socket_Type,
+      Name   => Socket_Handle);
+   --  Free allocated socket memory.
 
 end Spawn.Pool;

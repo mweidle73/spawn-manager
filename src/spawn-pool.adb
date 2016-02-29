@@ -31,7 +31,6 @@ with Ada.Text_IO;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded;
-with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 with GNAT.Expect;
@@ -48,11 +47,6 @@ package body Spawn.Pool is
    Addr_Base : constant String := "spawn_manager-";
 
    use Ada.Strings.Unbounded;
-
-   procedure Free is new Ada.Unchecked_Deallocation
-     (Object => Anet.Sockets.Unix.TCP_Socket_Type,
-      Name   => Socket_Handle);
-   --  Free allocated socket memory.
 
    type Socket_Container is record
       Address   : Unbounded_String;
