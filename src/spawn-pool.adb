@@ -226,7 +226,10 @@ package body Spawn.Pool is
                  := new Anet.Sockets.Unix.TCP_Socket_Type;
             begin
                Sock.Init;
-               Sock.Connect (Path => Anet.Sockets.Unix.Path_Type (Addr));
+               Connect_Retry_On_Refused
+                 (Socket => Sock,
+                  Path   => Anet.Sockets.Unix.Path_Type (Addr),
+                  Count  => 5);
                Sockets.Insert_Socket
                  (S => (Address   => To_Unbounded_String (Addr),
                         Pid       => Pid,
