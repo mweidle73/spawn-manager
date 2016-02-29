@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012, 2015 secunet Security Networks AG
+--  Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012-2016 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -76,5 +76,7 @@ private
 
    procedure Log_A_File (Filename : String);
    --  Log the contents of the specified file.
+
+   type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
 end Spawn.Pool;
