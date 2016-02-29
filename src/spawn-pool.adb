@@ -28,6 +28,7 @@
 --
 
 with Ada.Text_IO;
+with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
 with Ada.Strings.Unbounded;
@@ -35,7 +36,6 @@ with Ada.Strings.Unbounded;
 with GNAT.OS_Lib;
 with GNAT.Expect;
 
-with Anet.Sockets.Unix;
 with Anet.Streams;
 with Anet.Util;
 
@@ -84,6 +84,57 @@ package body Spawn.Pool is
    begin
       Sockets.Cleanup;
    end Cleanup;
+
+   -------------------------------------------------------------------------
+
+   procedure Connect_Retry_On_Refused
+     (Socket : Socket_Handle;
+      Path   : Anet.Sockets.Unix.Path_Type;
+      Count  : Positive)
+   is
+      use type Anet.Sockets.Unix.Path_Type;
+
+      function Is_Refused (Msg : String) return Boolean;
+      --  Returns True if the given message contains the pattern 'Connection
+      --  refused'.
+
+      function Is_Refused (Msg : String) return Boolean
+      is
+      begin
+         return Ada.Strings.Fixed.Index
+           (Source  => Msg,
+            Pattern => "Connection refused") > 0;
+      end Is_Refused;
+
+      Refused : Boolean;
+   begin
+      for I in 1 .. Count loop
+         Refused := False;
+
+         begin
+            Socket.Connect (Path => Path);
+
+         exception
+            when E : Anet.Sockets.Socket_Error =>
+               Refused := Is_Refused
+                 (Msg => Ada.Exceptions.Exception_Message (X => E));
+               if not Refused then
+                  raise;
+               end if;
+         end;
+
+         if not Refused then
+            return;
+         end if;
+
+         L (Msg => "Socket '" & String (Path) & "' refused "
+            & "connection, retrying in one second ...");
+         delay 1.0;
+      end loop;
+
+      raise Connection_Refused with "Socket '" & String (Path) & "' still "
+        & "refuses connection after" & Count'Img & " tries";
+   end Connect_Retry_On_Refused;
 
    -------------------------------------------------------------------------
 
