@@ -1,8 +1,8 @@
 --
 --  Process Spawn Manager
 --
---  Copyright (C) 2012, 2015 Reto Buerki <reet@codelabs.ch>
---  Copyright (C) 2012, 2015 secunet Security Networks AG
+--  Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
+--  Copyright (C) 2012-2016 secunet Security Networks AG
 --
 --  This program is free software; you can redistribute it and/or
 --  modify it under the terms of the GNU General Public License
@@ -48,8 +48,6 @@ package body Spawn.Pool is
    Addr_Base : constant String := "spawn_manager-";
 
    use Ada.Strings.Unbounded;
-
-   type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
    procedure Free is new Ada.Unchecked_Deallocation
      (Object => Anet.Sockets.Unix.TCP_Socket_Type,
