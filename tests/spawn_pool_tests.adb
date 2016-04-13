@@ -274,6 +274,7 @@ package body Spawn_Pool_Tests is
    is
    begin
       Spawn.Pool.Init (Socket_Dir => "/nonexistent/nonexistent");
+      Fail (Message => "Exception expected");
 
    exception
       when Spawn.Pool.Pool_Error => null;
