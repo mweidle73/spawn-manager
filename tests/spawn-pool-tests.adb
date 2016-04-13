@@ -123,26 +123,34 @@ package body Spawn.Pool.Tests is
 
    procedure Connect_Retry_On_Refused
    is
-      S : Socket_Handle
+      S_Server : Anet.Sockets.Unix.TCP_Socket_Type;
+      S_Client : Socket_Handle
         := new Anet.Sockets.Unix.TCP_Socket_Type;
-      P : constant Anet.Sockets.Unix.Path_Type
+      Path     : constant Anet.Sockets.Unix.Path_Type
         := Anet.Sockets.Unix.Path_Type
           ("/tmp/spawn.retry-" & Anet.Util.Random_String (Len => 12));
+
+      procedure Cleanup;
+      procedure Cleanup
+      is
+      begin
+         S_Client.Close;
+         S_Server.Close;
+         Free (X => S_Client);
+         Spawn.Pool.Cleanup;
+         L := null;
+      end Cleanup;
    begin
+      L := Ada.Text_IO.Put_Line'Access;
 
-      --  Positive test, calls Connect_Retry_On_Refused on 'real' manager.
-
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
-
-      --  Negative test.
-
-      S.Init;
+      S_Server.Init;
+      S_Client.Init;
 
       --  Socket error, but not connection refused.
 
       begin
-         Connect_Retry_On_Refused (Socket => S,
-                                   Path   => P,
+         Connect_Retry_On_Refused (Socket => S_Client,
+                                   Path   => Path,
                                    Count  => 2);
          Fail (Message => "Exception expected");
 
@@ -150,13 +158,13 @@ package body Spawn.Pool.Tests is
          when Anet.Sockets.Socket_Error => null;
       end;
 
-      S.Bind (Path => P);
+      S_Server.Bind (Path => Path);
 
       --  Connection refused error.
 
       begin
-         Connect_Retry_On_Refused (Socket => S,
-                                   Path   => P,
+         Connect_Retry_On_Refused (Socket => S_Client,
+                                   Path   => Path,
                                    Count  => 2);
          Fail (Message => "Exception expected");
 
@@ -164,13 +172,50 @@ package body Spawn.Pool.Tests is
          when Connection_Refused => null;
       end;
 
-      Free (X => S);
-      Spawn.Pool.Cleanup;
+      --  Reconnect succesful.
+
+      declare
+         Listen_Exception : Boolean := False;
+
+         task Listen;
+         task body Listen
+         is
+         begin
+            delay 2.0;
+            S_Server.Listen;
+
+         exception
+            when E : others =>
+               Ada.Text_IO.Put_Line
+                 (Ada.Exceptions.Exception_Information (X => E));
+               Listen_Exception := True;
+         end Listen;
+      begin
+         Connect_Retry_On_Refused (Socket => S_Client,
+                                   Path   => Path,
+                                   Count  => 6);
+
+         Assert (Condition => not Listen_Exception,
+                 Message   => "Exception in listener");
+
+         if not Listen'Terminated then
+            abort Listen;
+         end if;
+
+      exception
+         when others =>
+            if not Listen'Terminated then
+               abort Listen;
+            end if;
+            Cleanup;
+            raise;
+      end;
+
+      Cleanup;
 
    exception
       when others =>
-         Free (X => S);
-         Spawn.Pool.Cleanup;
+         Cleanup;
          raise;
    end Connect_Retry_On_Refused;
 
