@@ -67,6 +67,9 @@ package body Spawn_Manager_Tests is
             others  => <>);
    begin
       Socket.Init;
+
+      delay 0.3;
+
       Socket.Connect (Path => "obj/spawn_manager_0");
 
       Socket.Send (Item => Invalid1);
