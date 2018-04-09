@@ -487,6 +487,11 @@ package body Spawn.Pool.Tests is
    exception
       when others =>
          Spawn.Pool.Cleanup;
+         for I in Task_Array'Range loop
+            if not Task_Array (I)'Terminated then
+               abort Task_Array (I);
+            end if;
+         end loop;
          raise;
    end Parallel_Execution;
 
