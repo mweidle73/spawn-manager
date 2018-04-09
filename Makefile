@@ -38,7 +38,7 @@ spawn_tests:
 	@gnatmake -P$@ -p
 
 tests: spawn_tests spawn_manager
-	@$(OBJDIR)/spawn_manager $(OBJDIR)/spawn_manager_0 &
+	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
 	@$(OBJDIR)/test_runner
 
 spawn_manager: $(VERSION_SPEC) $(OBJDIR)/spawn_wrapper

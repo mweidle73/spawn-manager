@@ -174,6 +174,7 @@ package body Spawn.Pool is
      (Manager_Count  : Positive      := 1;
       Socket_Dir     : String        := "/tmp";
       Socket_Timeout : Duration      := 3.0;
+      Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access)
    is
       use type GNAT.OS_Lib.Process_Id;
@@ -200,7 +201,7 @@ package body Spawn.Pool is
             end if;
 
             Args := GNAT.OS_Lib.Argument_String_To_List
-              (Arg_String => Mngr_Bin & " " & Addr);
+              (Arg_String => Mngr_Bin & Buffer_Size'Img & " " & Addr);
 
             begin
                GNAT.Expect.Non_Blocking_Spawn

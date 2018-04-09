@@ -43,6 +43,7 @@ package Spawn.Pool is
      (Manager_Count  : Positive      := 1;
       Socket_Dir     : String        := "/tmp";
       Socket_Timeout : Duration      := 3.0;
+      Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access);
    --  Init pool with given number of spawn managers. The Socket_Dir argument
    --  specifies the directory used to store spawn_manager communication
@@ -50,6 +51,8 @@ package Spawn.Pool is
    --  runtime information. The optional socket timeout argument defines the
    --  duration to wait for the appearance of each (1 .. Manager_Count)
    --  communication sockets. If a timeout occurs, an exception is raised.
+   --  The Buffer_Size argument specifies the size of the command buffer used
+   --  in the spawned managers to receive commands.
 
    procedure Execute
      (Command   : String;

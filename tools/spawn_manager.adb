@@ -67,19 +67,19 @@ is
    procedure Send_Reply (Success : Boolean);
    --  Send reply message indicating success or failure.
 
-   procedure Print_Usage (Msg : String);
-   --  Print given message and client usage to stdout.
+   procedure Print_Usage;
+   --  Print usage to stdout.
 
    -------------------------------------------------------------------------
 
-   procedure Print_Usage (Msg : String)
+   procedure Print_Usage
    is
       use Ada.Command_Line;
    begin
       Ada.Text_IO.Put_Line
         (Item => "Spawn Manager, version " & Spawn.Version.Version_String);
-      Ada.Text_IO.Put_Line (Item => "Invalid arguments: " & Msg);
-      Ada.Text_IO.Put_Line (Item => "Usage: " & Command_Name & " <socket>");
+      Ada.Text_IO.Put_Line
+        (Item => "Usage: " & Command_Name & " <buffer_size> <socket>");
    end Print_Usage;
 
    -------------------------------------------------------------------------
@@ -95,23 +95,28 @@ is
       Sock_Comm.Send (Item => Stream.Get_Buffer);
       pragma Debug (L.Log_File ("Reply sent [" & Success'Img & "]"));
    end Send_Reply;
+
+   Buffer_Size : Positive;
+   Socket_Path : Unbounded_String;
 begin
-   if Ada.Command_Line.Argument_Count /= 1 then
-      Print_Usage (Msg => "No socket path given");
+   if Ada.Command_Line.Argument_Count /= 2 then
+      Print_Usage;
       Ada.Command_Line.Set_Exit_Status (Code => Ada.Command_Line.Failure);
       return;
    end if;
 
+   Buffer_Size := Positive'Value (Ada.Command_Line.Argument (1));
+   Socket_Path := To_Unbounded_String (Ada.Command_Line.Argument (2));
+
    pragma Debug (L.Init_Logfile
-                 (Path => Ada.Command_Line.Argument (1) & ".log"));
+                 (Path => S (Socket_Path) & ".log"));
    pragma Debug (L.Log_File (Message => "Starting Spawn Manager (version "
                              & Spawn.Version.Version_String & ")"));
 
-   if not Anet.Sockets.Unix.Is_Valid
-     (Path => Ada.Command_Line.Argument (1))
+   if not Anet.Sockets.Unix.Is_Valid (Path => S (Socket_Path))
    then
       pragma Debug (L.Log_File ("UNIX path too long '"
-                    & Ada.Command_Line.Argument (1) & "'"));
+                    & S (Socket_Path) & "'"));
       Ada.Command_Line.Set_Exit_Status (Code => Ada.Command_Line.Failure);
       return;
    end if;
@@ -124,14 +129,13 @@ begin
    declare
       Wrapper        : constant String := Spawn.Utils.Locate_Exec_On_Path
         (Name => "spawn_wrapper");
-      Socket_Path    : constant String := Ada.Command_Line.Argument (1);
       Signal_Handler : Spawn.Signals.Exit_Handler_Type
         (Socket_L => Sock_Listen'Access,
          Socket_C => Sock_Comm'Access);
       pragma Unreserve_All_Interrupts;
    begin
-      Sock_Listen.Bind (Path => Anet.Sockets.Unix.Path_Type (Socket_Path));
-      pragma Debug (L.Log_File ("Listening on socket " & Socket_Path));
+      Sock_Listen.Bind (Path => Anet.Sockets.Unix.Path_Type (S (Socket_Path)));
+      pragma Debug (L.Log_File ("Listening on socket " & S (Socket_Path)));
       Sock_Listen.Listen;
 
       Sock_Listen.Accept_Connection (New_Socket => Sock_Comm);
@@ -142,7 +146,8 @@ begin
          declare
             use type Ada.Streams.Stream_Element_Offset;
 
-            Buffer   : Ada.Streams.Stream_Element_Array (1 .. 8192);
+            Buffer   : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Buffer_Size));
             Last_Idx : Ada.Streams.Stream_Element_Offset;
             Req      : Spawn.Types.Data_Type;
          begin
