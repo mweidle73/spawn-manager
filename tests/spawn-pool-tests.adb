@@ -344,6 +344,7 @@ package body Spawn.Pool.Tests is
          if not Executor'Terminated then
             abort Executor;
          end if;
+         raise;
    end Execute_Nonterminating_Command;
 
    -------------------------------------------------------------------------
