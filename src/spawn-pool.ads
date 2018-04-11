@@ -81,6 +81,9 @@ private
    L : Log_Procedure := null;
    --  Log procedure.
 
+   Cmd_Buffer_Size : Ada.Streams.Stream_Element_Offset;
+   --  Size of the command send/receive buffer and stream array.
+
    procedure Log_A_File (Filename : String);
    --  Log the contents of the specified file.
 

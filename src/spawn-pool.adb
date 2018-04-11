@@ -143,7 +143,8 @@ package body Spawn.Pool is
       Directory : String  := Ada.Directories.Current_Directory;
       Timeout   : Integer := -1)
    is
-      Stream  : aliased Anet.Streams.Memory_Stream_Type (Max_Elements => 8192);
+      Stream  : aliased Anet.Streams.Memory_Stream_Type
+        (Max_Elements => Cmd_Buffer_Size);
       Reply   : Types.Data_Type;
       Request : constant Types.Data_Type
         := (Timeout => Timeout,
@@ -182,6 +183,7 @@ package body Spawn.Pool is
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
       L := Log;
+      Cmd_Buffer_Size := Ada.Streams.Stream_Element_Offset (Buffer_Size);
 
       --  Check if socket directory exists
 

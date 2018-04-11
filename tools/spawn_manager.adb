@@ -61,12 +61,6 @@ is
 
    Sock_Listen, Sock_Comm : aliased Anet.Sockets.Unix.TCP_Socket_Type;
 
-   Stream : aliased Anet.Streams.Memory_Stream_Type (Max_Elements => 8192);
-   --  In-memory stream used for request/response serialization.
-
-   procedure Send_Reply (Success : Boolean);
-   --  Send reply message indicating success or failure.
-
    procedure Print_Usage;
    --  Print usage to stdout.
 
@@ -81,20 +75,6 @@ is
       Ada.Text_IO.Put_Line
         (Item => "Usage: " & Command_Name & " <buffer_size> <socket>");
    end Print_Usage;
-
-   -------------------------------------------------------------------------
-
-   procedure Send_Reply (Success : Boolean)
-   is
-      Reply : constant Spawn.Types.Data_Type
-        := (Success => Success,
-            others  => <>);
-   begin
-      Stream.Clear;
-      Spawn.Types.Data_Type'Write (Stream'Access, Reply);
-      Sock_Comm.Send (Item => Stream.Get_Buffer);
-      pragma Debug (L.Log_File ("Reply sent [" & Success'Img & "]"));
-   end Send_Reply;
 
    Buffer_Size : Positive;
    Socket_Path : Unbounded_String;
@@ -127,6 +107,27 @@ begin
    Sock_Listen.Init;
 
    declare
+      Stream : aliased Anet.Streams.Memory_Stream_Type
+        (Max_Elements => Ada.Streams.Stream_Element_Offset (Buffer_Size));
+      --  In-memory stream used for request/response serialization.
+
+      procedure Send_Reply (Success : Boolean);
+      --  Send reply message indicating success or failure.
+
+      ----------------------------------------------------------------------
+
+      procedure Send_Reply (Success : Boolean)
+      is
+         Reply : constant Spawn.Types.Data_Type
+           := (Success => Success,
+               others  => <>);
+      begin
+         Stream.Clear;
+         Spawn.Types.Data_Type'Write (Stream'Access, Reply);
+         Sock_Comm.Send (Item => Stream.Get_Buffer);
+         pragma Debug (L.Log_File ("Reply sent [" & Success'Img & "]"));
+      end Send_Reply;
+
       Wrapper        : constant String := Spawn.Utils.Locate_Exec_On_Path
         (Name => "spawn_wrapper");
       Signal_Handler : Spawn.Signals.Exit_Handler_Type
