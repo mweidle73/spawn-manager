@@ -331,6 +331,7 @@ package body Spawn.Pool.Tests is
       delay 0.3;
       Spawn.Pool.Cleanup;
 
+      delay 0.3;
       if not Executor'Terminated then
          abort Executor;
       end if;
