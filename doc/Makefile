@@ -1,28 +1,26 @@
-DESTDIR   ?= html
-STYLEPATH ?= .
-PREPARE   := $(shell mkdir -p $(DESTDIR))
+DESTDIR ?= html
+PREPARE := $(shell mkdir -p $(DESTDIR))
 
 ASCIIDOC_OPTS = \
-	--backend=xhtml11 \
-	--conf-file=page.conf \
-	-a stylesdir=$(STYLEPATH) \
-	-a linkcss \
-	-a disable-javascript \
+	-a icons=font \
+	-a iconfont-remote! \
+	-a stylesdir=doc/css \
+	-a stylesheet=styles.css \
+	-a sectanchors \
 	-o -
 
-all: $(DESTDIR)/asciidoc.css $(DESTDIR)/index.html
+all: $(DESTDIR)/index.html
 
-$(DESTDIR)/asciidoc.css: asciidoc.css
+$(DESTDIR)/index.html: $(DESTDIR)/fonts $(DESTDIR)/css/font-awesome.css
+$(DESTDIR)/index.html: ../README css/styles.css
+	TZ=UTC asciidoctor $(ASCIIDOC_OPTS) $< > $@
+
+$(DESTDIR)/css/font-awesome.css: css/font-awesome.css
+	mkdir -p $(DESTDIR)/css
 	cp $< $@
 
-$(DESTDIR)/index.html: ../README page.conf
-	asciidoc $(ASCIIDOC_OPTS) $< > $@
+$(DESTDIR)/fonts: fonts
+	cp -R $< $@
 
 clean:
-	@rm -f $(DESTDIR)/*.html
-	@rm -f $(DESTDIR)/*.css
-
-distclean:
 	@rm -rf $(DESTDIR)
-
-PHONY: clean distclean
