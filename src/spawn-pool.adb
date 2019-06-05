@@ -114,7 +114,7 @@ package body Spawn.Pool is
             Socket.Connect (Path => Path);
 
          exception
-            when E : Anet.Sockets.Socket_Error =>
+            when E : Anet.Socket_Error =>
                Refused := Is_Refused
                  (Msg => Ada.Exceptions.Exception_Message (X => E));
                if not Refused then
