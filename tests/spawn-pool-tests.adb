@@ -155,7 +155,7 @@ package body Spawn.Pool.Tests is
          Fail (Message => "Exception expected");
 
       exception
-         when Anet.Sockets.Socket_Error => null;
+         when Anet.Socket_Error => null;
       end;
 
       S_Server.Bind (Path => Path);
