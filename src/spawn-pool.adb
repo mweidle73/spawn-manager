@@ -39,8 +39,6 @@ with GNAT.Expect;
 with Anet.Streams;
 with Anet.Util;
 
-with Spawn.Types;
-
 package body Spawn.Pool is
 
    Mngr_Bin  : constant String := "spawn_manager";
@@ -140,7 +138,8 @@ package body Spawn.Pool is
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1)
+      Timeout   : Integer := -1;
+      Cgroups   : Unbounded_String_Vector := USVP.Empty_Vector)
    is
       Stream  : aliased Anet.Streams.Memory_Stream_Type
         (Max_Elements => Cmd_Buffer_Size);
@@ -149,6 +148,7 @@ package body Spawn.Pool is
         := (Timeout => Timeout,
             Command => To_Unbounded_String (Command),
             Dir     => To_Unbounded_String (Directory),
+            Cgroups => Cgroups,
             others  => <>);
    begin
       L (Msg => "Executing command '" & Command & "'");

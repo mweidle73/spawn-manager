@@ -28,14 +28,25 @@
 --
 
 with Ada.Strings.Unbounded;
+with Ada.Containers.Vectors;
 
 package Spawn.Types is
+
+   use Ada.Strings.Unbounded;
+
+   package Unbounded_String_Vector_Package is
+     new Ada.Containers.Vectors
+       (Element_Type  => Unbounded_String,
+        Index_Type    => Positive);
+   package USVP renames Unbounded_String_Vector_Package;
+   subtype Unbounded_String_Vector is USVP.Vector;
 
    type Data_Type is record
       Success : Boolean := False;
       Timeout : Integer := -1;
-      Command : Ada.Strings.Unbounded.Unbounded_String;
-      Dir     : Ada.Strings.Unbounded.Unbounded_String;
+      Command : Unbounded_String;
+      Dir     : Unbounded_String;
+      Cgroups : Unbounded_String_Vector := USVP.Empty_Vector;
    end record;
 
 end Spawn.Types;
