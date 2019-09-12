@@ -31,10 +31,8 @@ with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
-with Ada.Strings.Unbounded;
 
 with GNAT.OS_Lib;
-with GNAT.Expect;
 
 with Anet.Streams;
 with Anet.Util;
@@ -45,15 +43,6 @@ package body Spawn.Pool is
 
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
-
-   use Ada.Strings.Unbounded;
-
-   type Socket_Container is record
-      Address   : Unbounded_String;
-      Pid       : GNAT.Expect.Process_Descriptor;
-      Socket    : Socket_Handle;
-      Available : Boolean;
-   end record;
 
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
@@ -141,7 +130,9 @@ package body Spawn.Pool is
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1)
+      Timeout   : Integer := -1;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
    is
       Stream  : aliased Anet.Streams.Memory_Stream_Type
         (Max_Elements => Cmd_Buffer_Size);
@@ -151,14 +142,20 @@ package body Spawn.Pool is
             Command => To_Unbounded_String (Command),
             Dir     => To_Unbounded_String (Directory),
             others  => <>);
+      S   : Socket_Container;
    begin
       L (Msg => "Executing command '" & Command & "'");
 
       Types.Data_Type'Write (Stream'Access, Request);
 
+      Sockets.Get_Socket (S);
+
+      Pid_Setup (S.Pid);
+
       declare
          Rcv_Data : constant Ada.Streams.Stream_Element_Array
-           := Send_Receive (Request => Stream.Get_Buffer);
+           := Send_Receive (Cont    => S,
+                            Request => Stream.Get_Buffer);
       begin
          Stream.Set_Buffer (Buffer => Rcv_Data);
          Types.Data_Type'Read (Stream'Access, Reply);
@@ -286,14 +283,13 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
+     (Cont    : Socket_Container;
+      Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array
    is
       use type Ada.Streams.Stream_Element_Offset;
 
-      Cont : Socket_Container;
    begin
-      Sockets.Get_Socket (S => Cont);
       L (Msg => "Sending request using socket " & To_String (Cont.Address));
 
       Cont.Socket.Send (Item => Request);

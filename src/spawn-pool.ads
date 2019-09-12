@@ -30,10 +30,15 @@
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Unchecked_Deallocation;
+with Ada.Strings.Unbounded;
 
 with Anet.Sockets.Unix;
 
+with GNAT.Expect;
+
 package Spawn.Pool is
+
+   use Ada.Strings.Unbounded;
 
    type Log_Procedure is access procedure (Msg : String);
 
@@ -54,10 +59,14 @@ package Spawn.Pool is
    --  The Buffer_Size argument specifies the size of the command buffer used
    --  in the spawned managers to receive commands.
 
+   procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
+
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1);
+      Timeout   : Integer := -1;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
    --  Execute command in given directory. The Timeout parameter specifies the
    --  time in milliseconds after the command times out (the default is no
    --  timeout (-1)). If a timeout occurs, a Command_Failed exception is raised
@@ -72,8 +81,18 @@ package Spawn.Pool is
 
 private
 
+   type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
+
+   type Socket_Container is record
+      Address   : Unbounded_String;
+      Pid       : GNAT.Expect.Process_Descriptor;
+      Socket    : Socket_Handle;
+      Available : Boolean;
+   end record;
+
    function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
+     (Cont    : Socket_Container;
+      Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array;
    --  Send given data as request to spawn manager. Return data of received
    --  reply.
@@ -86,8 +105,6 @@ private
 
    procedure Log_A_File (Filename : String);
    --  Log the contents of the specified file.
-
-   type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
    procedure Free is new Ada.Unchecked_Deallocation
      (Object => Anet.Sockets.Unix.TCP_Socket_Type,
