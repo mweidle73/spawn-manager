@@ -31,11 +31,14 @@ with Ada.Strings.Unbounded;
 
 package Spawn.Types is
 
+   use Ada.Strings.Unbounded;
+
    type Data_Type is record
       Success : Boolean := False;
       Timeout : Integer := -1;
-      Command : Ada.Strings.Unbounded.Unbounded_String;
-      Dir     : Ada.Strings.Unbounded.Unbounded_String;
+      Command : Unbounded_String;
+      Dir     : Unbounded_String;
+      Cgroup  : Unbounded_String := Null_Unbounded_String;
    end record;
 
 end Spawn.Types;

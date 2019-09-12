@@ -58,7 +58,7 @@ package body Spawn_Manager_Tests is
    is
       use Ada.Streams;
 
-      Stream   : aliased Anet.Streams.Memory_Stream_Type (Max_Elements => 32);
+      Stream   : aliased Anet.Streams.Memory_Stream_Type (Max_Elements => 38);
       Socket   : Anet.Sockets.Unix.TCP_Socket_Type;
       Invalid1 : constant Stream_Element_Array (1 .. 9) := (others => 16#ac#);
       Invalid2 : constant Stream_Element_Array (1 .. 2) := (others => 234);

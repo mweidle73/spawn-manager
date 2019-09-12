@@ -31,7 +31,6 @@ with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
-with Ada.Strings.Unbounded;
 
 with GNAT.OS_Lib;
 with GNAT.Expect;
@@ -43,10 +42,10 @@ with Spawn.Types;
 
 package body Spawn.Pool is
 
+   use Spawn.Types;
+
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
-
-   use Ada.Strings.Unbounded;
 
    type Socket_Container is record
       Address   : Unbounded_String;
@@ -141,7 +140,8 @@ package body Spawn.Pool is
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1)
+      Timeout   : Integer := -1;
+      Cgroup    : Unbounded_String := Null_Unbounded_String)
    is
       Stream  : aliased Anet.Streams.Memory_Stream_Type
         (Max_Elements => Cmd_Buffer_Size);
@@ -150,6 +150,7 @@ package body Spawn.Pool is
         := (Timeout => Timeout,
             Command => To_Unbounded_String (Command),
             Dir     => To_Unbounded_String (Directory),
+            Cgroup  => Cgroup,
             others  => <>);
    begin
       L (Msg => "Executing command '" & Command & "'");

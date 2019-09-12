@@ -30,10 +30,13 @@
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Unchecked_Deallocation;
+with Ada.Strings.Unbounded;
 
 with Anet.Sockets.Unix;
 
 package Spawn.Pool is
+
+   use Ada.Strings.Unbounded;
 
    type Log_Procedure is access procedure (Msg : String);
 
@@ -57,7 +60,8 @@ package Spawn.Pool is
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1);
+      Timeout   : Integer := -1;
+      Cgroup    : Unbounded_String := Null_Unbounded_String);
    --  Execute command in given directory. The Timeout parameter specifies the
    --  time in milliseconds after the command times out (the default is no
    --  timeout (-1)). If a timeout occurs, a Command_Failed exception is raised
