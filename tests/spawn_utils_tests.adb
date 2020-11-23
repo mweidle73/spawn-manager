@@ -50,7 +50,7 @@ package body Spawn_Utils_Tests is
    procedure Locate_Executables
    is
    begin
-      Assert (Condition => Locate_Exec_On_Path (Name => "bash") = "/bin/bash",
+      Assert (Condition => Locate_Exec_On_Path (Name => "bash") = "/usr/bin/bash",
               Message   => "Unexpected path");
 
       begin

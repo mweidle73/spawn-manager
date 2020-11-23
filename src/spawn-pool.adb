@@ -92,8 +92,6 @@ package body Spawn.Pool is
       Path   : Anet.Sockets.Unix.Path_Type;
       Count  : Positive)
    is
-      use type Anet.Sockets.Unix.Path_Type;
-
       function Is_Refused (Msg : String) return Boolean;
       --  Returns True if the given message contains the pattern 'Connection
       --  refused'.
@@ -115,7 +113,7 @@ package body Spawn.Pool is
             Socket.Connect (Path => Path);
 
          exception
-            when E : Anet.Sockets.Socket_Error =>
+            when E : Anet.Socket_Error =>
                Refused := Is_Refused
                  (Msg => Ada.Exceptions.Exception_Message (X => E));
                if not Refused then
@@ -178,8 +176,6 @@ package body Spawn.Pool is
       Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access)
    is
-      use type GNAT.OS_Lib.Process_Id;
-
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
       L := Log;
