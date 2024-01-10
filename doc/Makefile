@@ -11,16 +11,8 @@ ASCIIDOC_OPTS = \
 
 all: $(DESTDIR)/index.html
 
-$(DESTDIR)/index.html: $(DESTDIR)/fonts $(DESTDIR)/css/font-awesome.css
 $(DESTDIR)/index.html: ../README css/styles.css
 	TZ=UTC asciidoctor $(ASCIIDOC_OPTS) $< > $@
-
-$(DESTDIR)/css/font-awesome.css: css/font-awesome.css
-	mkdir -p $(DESTDIR)/css
-	cp $< $@
-
-$(DESTDIR)/fonts: fonts
-	cp -R $< $@
 
 clean:
 	@rm -rf $(DESTDIR)
