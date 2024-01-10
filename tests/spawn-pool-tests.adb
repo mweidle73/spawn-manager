@@ -35,8 +35,6 @@ with Ada.Strings.Unbounded;
 
 with Anet.Util;
 
-with Spawn.Pool;
-
 package body Spawn.Pool.Tests is
 
    use Ahven;
