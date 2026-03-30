@@ -33,7 +33,6 @@ with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
 
 with GNAT.OS_Lib;
-with GNAT.Expect;
 
 with Anet.Streams;
 with Anet.Util;
@@ -46,13 +45,6 @@ package body Spawn.Pool is
 
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
-
-   type Socket_Container is record
-      Address   : Unbounded_String;
-      Pid       : GNAT.Expect.Process_Descriptor;
-      Socket    : Socket_Handle;
-      Available : Boolean;
-   end record;
 
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
@@ -138,11 +130,15 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    procedure Execute
-     (Command   : String;
-      Directory : String  := Ada.Directories.Current_Directory;
-      Timeout   : Integer := -1;
-      Cgroup    : Unbounded_String := Null_Unbounded_String)
+     (Command           : String;
+      Directory         : String  := Ada.Directories.Current_Directory;
+      Timeout           : Integer := -1;
+      Cgroup_Procs_Path : String  := "")
    is
+      use Ada.Text_IO;
+      use Ada.Strings;
+      use Ada.Strings.Fixed;
+
       Stream  : aliased Anet.Streams.Memory_Stream_Type
         (Max_Elements => Cmd_Buffer_Size);
       Reply   : Types.Data_Type;
@@ -150,16 +146,41 @@ package body Spawn.Pool is
         := (Timeout => Timeout,
             Command => To_Unbounded_String (Command),
             Dir     => To_Unbounded_String (Directory),
-            Cgroup  => Cgroup,
             others  => <>);
+      S   : Socket_Container;
+
+      procedure Move_To_Cgroup (Pd : GNAT.Expect.Process_Descriptor);
+      procedure Move_To_Cgroup (Pd : GNAT.Expect.Process_Descriptor)
+      is
+         F       : File_Type;
+         Pid_Str : constant String
+           := Trim (GNAT.Expect.Get_Pid (Pd)'Img, Both);
+      begin
+         delay 0.0;
+         L (Msg => "Writing '" & Pid_Str & "' to " & Cgroup_Procs_Path);
+         Open (File => F,
+               Mode => Append_File,
+               Name => Cgroup_Procs_Path);
+         Put (File => F,
+              Item => Pid_Str);
+         Close (File => F);
+      end Move_To_Cgroup;
+
    begin
       L (Msg => "Executing command '" & Command & "'");
 
       Types.Data_Type'Write (Stream'Access, Request);
 
+      Sockets.Get_Socket (S);
+
+      if Cgroup_Procs_Path'Length > 0 then
+         Move_To_Cgroup (S.Pid);
+      end if;
+
       declare
          Rcv_Data : constant Ada.Streams.Stream_Element_Array
-           := Send_Receive (Request => Stream.Get_Buffer);
+           := Send_Receive (Cont    => S,
+                            Request => Stream.Get_Buffer);
       begin
          Stream.Set_Buffer (Buffer => Rcv_Data);
          Types.Data_Type'Read (Stream'Access, Reply);
@@ -287,14 +308,13 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    function Send_Receive
-     (Request : Ada.Streams.Stream_Element_Array)
+     (Cont : Socket_Container;
+      Request : Ada.Streams.Stream_Element_Array)
       return Ada.Streams.Stream_Element_Array
    is
       use type Ada.Streams.Stream_Element_Offset;
 
-      Cont : Socket_Container;
    begin
-      Sockets.Get_Socket (S => Cont);
       L (Msg => "Sending request using socket " & To_String (Cont.Address));
 
       Cont.Socket.Send (Item => Request);

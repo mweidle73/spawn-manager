@@ -151,31 +151,6 @@ begin
 
             ----------------------------------------------------------------
 
-            procedure Apply_Cgroup (Cgroup : Unbounded_String);
-            procedure Apply_Cgroup (Cgroup : Unbounded_String)
-            is
-               Task_File_Path : constant String := S (Cgroup & "/tasks");
-               Tasks_File     : Ada.Text_IO.File_Type;
-               Pid_Str        : constant String
-                 := GNAT.Expect.Process_Id'Image (GNAT.Expect.Get_Pid (Pd));
-            begin
-               if Exists (Name => Task_File_Path) then
-                  Ada.Text_IO.Create
-                    (File => Tasks_File,
-                     Mode => Ada.Text_IO.Out_File,
-                     Name => Task_File_Path);
-                  Ada.Text_IO.Put
-                    (File => Tasks_File,
-                     Item => Pid_Str);
-                  Ada.Text_IO.Close (File => Tasks_File);
-                  pragma Debug (L.Log_File
-                    ("Moved spawned process " & Pid_Str & " to cgroup "
-                     & Containing_Directory (Task_File_Path)));
-               end if;
-            end Apply_Cgroup;
-
-            ----------------------------------------------------------------
-
             use type Ada.Streams.Stream_Element_Offset;
 
             Buffer   : Ada.Streams.Stream_Element_Array
@@ -200,7 +175,6 @@ begin
             pragma Debug (L.Log_File ("Command request received:"));
             pragma Debug (L.Log_File ("- CMD    [" & S (Req.Command) & "]"));
             pragma Debug (L.Log_File ("- DIR    [" & S (Req.Dir) & "]"));
-            pragma Debug (L.Log_File ("- CGROUP [" & S (Req.Cgroup) & "]"));
 
             declare
                Args  : GNAT.OS_Lib.Argument_List (1 .. 5);
@@ -229,10 +203,6 @@ begin
                Signal_Handler.Set_Running (Descriptor => Pd);
                pragma Debug (L.Log_File ("Command spawned (pid"
                  & GNAT.Expect.Get_Pid (Descriptor => Pd)'Img & ")"));
-
-               if Length (Req.Cgroup) > 0 then
-                 Apply_Cgroup (Cgroup => Req.Cgroup);
-               end if;
 
                begin
                   GNAT.Expect.Expect

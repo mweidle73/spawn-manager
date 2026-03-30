@@ -38,7 +38,6 @@ package Spawn.Types is
       Timeout : Integer := -1;
       Command : Unbounded_String;
       Dir     : Unbounded_String;
-      Cgroup  : Unbounded_String := Null_Unbounded_String;
    end record;
 
 end Spawn.Types;
