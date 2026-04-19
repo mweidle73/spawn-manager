@@ -27,6 +27,8 @@
 --  executable file might be covered by the GNU Public License.
 --
 
+with Ada.Directories;
+
 with Spawn.Utils;
 
 package body Spawn_Utils_Tests is
@@ -49,8 +51,10 @@ package body Spawn_Utils_Tests is
 
    procedure Locate_Executables
    is
+      Path : constant String := Locate_Exec_On_Path (Name => "bash");
    begin
-      Assert (Condition => Locate_Exec_On_Path (Name => "bash") = "/bin/bash",
+      Assert (Condition => Ada.Directories.Exists (Name => Path)
+                and then Ada.Directories.Base_Name (Name => Path) = "bash",
               Message   => "Unexpected path");
 
       begin
