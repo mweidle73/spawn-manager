@@ -35,6 +35,7 @@ with Ada.Exceptions;
 with GNAT.OS_Lib;
 
 with Anet.Streams;
+with Anet.OS;
 with Anet.Util;
 
 with Spawn.Types;
@@ -358,6 +359,10 @@ package body Spawn.Pool is
             end case;
 
             E.Socket.Close;
+            --  A manager may have changed its current directory while using
+            --  a relative address. Remove the stored address from the pool's
+            --  stable working directory after the manager has terminated.
+            Anet.OS.Delete_File (Filename => To_String (E.Address));
             Free (X => E.Socket);
             SOMP.Next (Position => Pos);
          end loop;

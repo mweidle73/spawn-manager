@@ -31,8 +31,10 @@ with Ada.Text_IO;
 with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Real_Time;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Anet.OS;
 with Anet.Util;
 
 package body Spawn.Pool.Tests is
@@ -74,6 +76,79 @@ package body Spawn.Pool.Tests is
 
    procedure Test_Log_Error (Msg : String);
    --  Just raises a test exception.
+
+   -------------------------------------------------------------------------
+
+   procedure Cleanup_Relative_Socket
+   is
+      use Ada.Directories;
+
+      Dir : constant String := "obj/relative-socket-"
+        & Anet.Util.Random_String (Len => 8);
+      Log_Prefix  : constant String := "Forked manager ";
+      Socket_Path : Unbounded_String;
+      Initialized : Boolean := False;
+
+      procedure Remove_Test_Directory;
+      procedure Remove_Test_Directory
+      is
+      begin
+         if Exists (Name => Dir) then
+            Delete_Tree (Directory => Dir);
+         end if;
+      end Remove_Test_Directory;
+   begin
+      Create_Directory (New_Directory => Dir);
+      Test_Buffer := Null_Unbounded_String;
+      Spawn.Pool.Init (Socket_Dir => Dir,
+                       Log        => Test_Log'Access);
+      Initialized := True;
+
+      declare
+         Log_Data      : constant String := To_String (Test_Buffer);
+         Address_First : constant Natural := Ada.Strings.Fixed.Index
+           (Source  => Log_Data,
+            Pattern => Log_Prefix) + Log_Prefix'Length;
+         Address_Last  : constant Natural := Ada.Strings.Fixed.Index
+           (Source  => Log_Data,
+            Pattern => (1 => ASCII.LF),
+            From    => Address_First) - 1;
+      begin
+         Assert (Condition => Address_First > Log_Prefix'Length
+                   and then Address_Last >= Address_First,
+                 Message   => "Manager socket address not logged");
+         Socket_Path := To_Unbounded_String
+           (Log_Data (Address_First .. Address_Last));
+      end;
+
+      --  The manager changes its cwd for the command. A relative socket path
+      --  must still be removed from the directory where it was bound.
+      Spawn.Pool.Execute (Command   => "/bin/true",
+                          Directory => "/tmp");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+      begin
+         Anet.OS.Delete_File
+           (Filename       => To_String (Socket_Path),
+            Ignore_Missing => False);
+         Fail (Message => "Relative manager socket was not removed: "
+               & To_String (Socket_Path));
+      exception
+         when Anet.OS.IO_Error => null;
+      end;
+      Test_Buffer := Null_Unbounded_String;
+      Remove_Test_Directory;
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         Test_Buffer := Null_Unbounded_String;
+         Remove_Test_Directory;
+         raise;
+   end Cleanup_Relative_Socket;
 
    -------------------------------------------------------------------------
 
@@ -382,6 +457,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Invalid_Socket_Path'Access,
          Name    => "Invalid socket path");
+      T.Add_Test_Routine
+        (Routine => Cleanup_Relative_Socket'Access,
+         Name    => "Cleanup relative socket");
       T.Add_Test_Routine
         (Routine => Log_A_File'Access,
          Name    => "Log file contents");
