@@ -1,0 +1,57 @@
+name: Trixie CI
+
+on:
+  push:
+    branches:
+      - abuild-gh
+  pull_request:
+    branches:
+      - abuild-gh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trixie-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Spawn Manager
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the GitHub-only overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show-ref --verify refs/remotes/origin/abuild
+          git merge-base --is-ancestor origin/abuild HEAD
+          unexpected=$(
+            git diff --name-only origin/abuild...HEAD |
+              grep -Ev '^\.github/' || true
+          )
+          if test -n "$unexpected"; then
+            echo "abuild-gh contains changes outside .github/:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Build Spawn Manager and run its unit tests
+        shell: bash
+        run: |
+          .github/ci/run /bin/sh -c '
+            set -eu
+            test "$(id -u)" -ne 0
+            make clean
+            make -j8
+            make tests
+          '
