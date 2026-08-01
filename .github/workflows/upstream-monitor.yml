@@ -1,0 +1,46 @@
+name: Upstream Monitor
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-monitor
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare Codelabs master
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out mirrored upstream branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: master
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Compare with Codelabs
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_url=https://git.codelabs.ch/git/spawn-manager.git
+          local_commit=$(git rev-parse HEAD)
+          upstream_commit=$(git ls-remote "$upstream_url" refs/heads/master | cut -f1)
+          if test -z "$upstream_commit"; then
+            echo "Codelabs master could not be resolved" >&2
+            exit 1
+          fi
+          if test "$local_commit" != "$upstream_commit"; then
+            echo "The GitHub master branch is behind Codelabs:" >&2
+            echo "  GitHub:    $local_commit" >&2
+            echo "  Codelabs: $upstream_commit" >&2
+            exit 1
+          fi
+          echo "GitHub master matches Codelabs at $local_commit"
