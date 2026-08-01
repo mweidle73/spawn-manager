@@ -1,0 +1,22 @@
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    asciidoctor \
+    bash \
+    ca-certificates \
+    gcc \
+    git \
+    gnat \
+    gprbuild \
+    libahven-dev \
+    libanet-dev \
+    libc6-dev \
+    make \
+    ruby-pygments.rb \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+
+CMD ["/bin/sh"]
