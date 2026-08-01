@@ -35,6 +35,18 @@ an interactive shell in `/work`:
 .github/ci/run
 ```
 
+Build the documentation with the same image:
+
+```sh
+.github/ci/run /bin/sh -c '
+  set -eu
+  test "$(id -u)" -ne 0
+  make doc
+'
+```
+
+The generated HTML landing page is written to `doc/html/index.html`.
+
 Set `SPAWN_CI_IMAGE` to override the local image name,
 `DOCKER_PLATFORM` to override the default `linux/amd64` platform, and
 `SPAWN_CI_NETWORK` to override the default `none` network mode.
