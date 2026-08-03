@@ -50,3 +50,7 @@ The generated HTML landing page is written to `doc/html/index.html`.
 Set `SPAWN_CI_IMAGE` to override the local image name,
 `DOCKER_PLATFORM` to override the default `linux/amd64` platform, and
 `SPAWN_CI_NETWORK` to override the default `none` network mode.
+
+The weekly upstream monitor compares both `master` and all tag refs with
+Codelabs. The upstream currently has no tags, so the first new tag will fail
+the workflow for manual review; the workflow never creates or updates tags.
