@@ -66,8 +66,14 @@ package Spawn.Pool.Tests is
    procedure Invalid_Socket_Path;
    --  Verify error behavior with invalid (UNIX) socket path.
 
+   procedure Invalid_Socket_Path_Relative;
+   --  Verify that an invalid relative path identifies its current directory.
+
    procedure Cleanup_Relative_Socket;
    --  Verify cleanup after a manager changes its working directory.
+
+   procedure Cleanup_Socket_After_Delete_Error;
+   --  Verify cleanup continues after a manager socket cannot be deleted.
 
    procedure Log_A_File;
    --  Test Log_A_File procedure;

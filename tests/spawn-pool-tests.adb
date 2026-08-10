@@ -77,6 +77,9 @@ package body Spawn.Pool.Tests is
    procedure Test_Log_Error (Msg : String);
    --  Just raises a test exception.
 
+   procedure Raise_Delete_Error (Filename : String);
+   --  Raise a deterministic socket deletion error.
+
    -------------------------------------------------------------------------
 
    procedure Cleanup_Relative_Socket
@@ -154,6 +157,65 @@ package body Spawn.Pool.Tests is
          Remove_Test_Directory;
          raise;
    end Cleanup_Relative_Socket;
+
+   -------------------------------------------------------------------------
+
+   procedure Cleanup_Socket_After_Delete_Error
+   is
+      use Ada.Directories;
+
+      Dir : constant String := "obj/delete-error-"
+        & Anet.Util.Random_String (Len => 8);
+      Error_Prefix : constant String := "Unable to remove manager socket '"
+        & Current_Directory & "/" & Dir & "/";
+
+      Initialized : Boolean := False;
+
+      procedure Remove_Test_Directory;
+      procedure Remove_Test_Directory
+      is
+      begin
+         if Exists (Name => Dir) then
+            Delete_Tree (Directory => Dir);
+         end if;
+      end Remove_Test_Directory;
+   begin
+      Create_Directory (New_Directory => Dir);
+      Test_Buffer := Null_Unbounded_String;
+      Spawn.Pool.Init (Manager_Count => 2,
+                       Socket_Dir    => Dir,
+                       Log           => Test_Log'Access);
+      Initialized := True;
+
+      Socket_File_Delete := Raise_Delete_Error'Access;
+
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+      Socket_File_Delete := Delete_Socket_File'Access;
+
+      Assert
+        (Condition => Ada.Strings.Fixed.Count
+           (Source  => To_String (Test_Buffer),
+            Pattern => Error_Prefix) = 2,
+         Message   => "Cleanup did not report both socket delete errors");
+
+      Test_Buffer := Null_Unbounded_String;
+      Spawn.Pool.Cleanup;
+      Assert (Condition => Length (Test_Buffer) = 0,
+              Message   => "Socket store was not cleared after delete errors");
+
+      Remove_Test_Directory;
+
+   exception
+      when others =>
+         Socket_File_Delete := Delete_Socket_File'Access;
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         Test_Buffer := Null_Unbounded_String;
+         Remove_Test_Directory;
+         raise;
+   end Cleanup_Socket_After_Delete_Error;
 
    -------------------------------------------------------------------------
 
@@ -463,8 +525,14 @@ package body Spawn.Pool.Tests is
         (Routine => Invalid_Socket_Path'Access,
          Name    => "Invalid socket path");
       T.Add_Test_Routine
+        (Routine => Invalid_Socket_Path_Relative'Access,
+         Name    => "Invalid relative socket path");
+      T.Add_Test_Routine
         (Routine => Cleanup_Relative_Socket'Access,
          Name    => "Cleanup relative socket");
+      T.Add_Test_Routine
+        (Routine => Cleanup_Socket_After_Delete_Error'Access,
+         Name    => "Continue cleanup after delete error");
       T.Add_Test_Routine
         (Routine => Log_A_File'Access,
          Name    => "Log file contents");
@@ -506,10 +574,45 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Invalid_Socket_Path_Relative
+   is
+      use Ada.Directories;
+
+      Dir : constant String := "obj/"
+        & Anet.Util.Random_String (Len => 96);
+   begin
+      Create_Directory (New_Directory => Dir);
+
+      Spawn.Pool.Init (Socket_Dir => Dir,
+                       Log        => Ada.Text_IO.Put_Line'Access);
+      Delete_Directory (Directory => Dir);
+      Fail (Message => "Exception expected");
+
+   exception
+      when E : Spawn.Pool.Pool_Error =>
+         Delete_Directory (Directory => Dir);
+         Assert
+           (Condition => Ada.Strings.Fixed.Index
+              (Source  => Ada.Exceptions.Exception_Message (X => E),
+               Pattern => "UNIX path too long '" & Dir
+                 & "/spawn_manager-") = 1,
+            Message   => "Relative socket diagnostic omits selected path");
+         Assert
+           (Condition => Ada.Strings.Fixed.Index
+              (Source  => Ada.Exceptions.Exception_Message (X => E),
+               Pattern => " relative to '" & Current_Directory & "'") > 0,
+            Message   => "Relative socket diagnostic omits current directory");
+      when others =>
+         if Exists (Name => Dir) then
+            Delete_Directory (Directory => Dir);
+         end if;
+         raise;
+   end Invalid_Socket_Path_Relative;
+
+   -------------------------------------------------------------------------
+
    procedure Log_A_File
    is
-      use Ada.Strings.Unbounded;
-
       Lf : constant String := "data/log_contents";
 
       Ref_Buffer : constant String :=
@@ -620,9 +723,17 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Raise_Delete_Error (Filename : String)
+   is
+      pragma Unreferenced (Filename);
+   begin
+      raise Anet.OS.IO_Error with "injected delete failure";
+   end Raise_Delete_Error;
+
+   -------------------------------------------------------------------------
+
    procedure Test_Log (Msg : String)
    is
-      use type Ada.Strings.Unbounded.Unbounded_String;
    begin
       Test_Buffer := Test_Buffer & Msg & ASCII.LF;
    end Test_Log;

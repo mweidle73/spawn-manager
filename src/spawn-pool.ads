@@ -106,6 +106,19 @@ private
    procedure Log_A_File (Filename : String);
    --  Log the contents of the specified file.
 
+   type Delete_File_Procedure is access procedure (Filename : String);
+
+   procedure Delete_Socket_File (Filename : String);
+   --  Remove the given socket file.
+
+   procedure Remove_Socket_File (Filename : String);
+   --  Remove a manager socket without aborting cleanup of the remaining
+   --  managers when unlink(2) fails.
+
+   Socket_File_Delete : Delete_File_Procedure := Delete_Socket_File'Access;
+   --  Socket removal operation. A named indirection keeps the cleanup error
+   --  path deterministic for the child-package tests.
+
    procedure Free is new Ada.Unchecked_Deallocation
      (Object => Anet.Sockets.Unix.TCP_Socket_Type,
       Name   => Socket_Handle);

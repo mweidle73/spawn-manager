@@ -45,6 +45,10 @@ package body Spawn.Pool is
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
 
+   function Resolved_Path (Path : String) return String;
+   --  Return the absolute spelling of Path relative to the pool's stable
+   --  working directory.
+
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
       Element_Type => Socket_Container);
@@ -127,6 +131,14 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   procedure Delete_Socket_File (Filename : String)
+   is
+   begin
+      Anet.OS.Delete_File (Filename => Filename);
+   end Delete_Socket_File;
+
+   -------------------------------------------------------------------------
+
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
@@ -194,7 +206,13 @@ package body Spawn.Pool is
               & Anet.Util.Random_String (Len => 8);
          begin
             if not Anet.Sockets.Unix.Is_Valid (Path => Addr) then
-               raise Pool_Error with "UNIX path too long '" & Addr & "'";
+               if Socket_Dir (Socket_Dir'First) = '/' then
+                  raise Pool_Error with "UNIX path too long '" & Addr & "'";
+               else
+                  raise Pool_Error with "UNIX path too long '" & Addr
+                    & "' relative to '"
+                    & Ada.Directories.Current_Directory & "'";
+               end if;
             end if;
 
             Args := GNAT.OS_Lib.Argument_String_To_List
@@ -280,6 +298,35 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   procedure Remove_Socket_File (Filename : String)
+   is
+   begin
+      Socket_File_Delete (Filename => Filename);
+
+   exception
+      when E : Anet.OS.IO_Error =>
+         L (Msg => "Unable to remove manager socket '"
+            & Resolved_Path (Path => Filename) & "': "
+            & Ada.Exceptions.Exception_Message (X => E));
+   end Remove_Socket_File;
+
+   -------------------------------------------------------------------------
+
+   function Resolved_Path (Path : String) return String
+   is
+      Current_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      if Path (Path'First) = '/' then
+         return Path;
+      elsif Current_Dir = "/" then
+         return Current_Dir & Path;
+      else
+         return Current_Dir & "/" & Path;
+      end if;
+   end Resolved_Path;
+
+   -------------------------------------------------------------------------
+
    function Send_Receive
      (Cont    : Socket_Container;
       Request : Ada.Streams.Stream_Element_Array)
@@ -361,8 +408,9 @@ package body Spawn.Pool is
             E.Socket.Close;
             --  A manager may have changed its current directory while using
             --  a relative address. Remove the stored address from the pool's
-            --  stable working directory after the manager has terminated.
-            Anet.OS.Delete_File (Filename => To_String (E.Address));
+            --  stable working directory after the manager has terminated. A
+            --  failed unlink must not prevent cleanup of the other managers.
+            Remove_Socket_File (Filename => To_String (E.Address));
             Free (X => E.Socket);
             SOMP.Next (Position => Pos);
          end loop;
