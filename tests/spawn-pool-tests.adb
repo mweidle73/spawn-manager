@@ -597,11 +597,6 @@ package body Spawn.Pool.Tests is
                Pattern => "UNIX path too long '" & Dir
                  & "/spawn_manager-") = 1,
             Message   => "Relative socket diagnostic omits selected path");
-         Assert
-           (Condition => Ada.Strings.Fixed.Index
-              (Source  => Ada.Exceptions.Exception_Message (X => E),
-               Pattern => " relative to '" & Current_Directory & "'") > 0,
-            Message   => "Relative socket diagnostic omits current directory");
       when others =>
          if Exists (Name => Dir) then
             Delete_Directory (Directory => Dir);

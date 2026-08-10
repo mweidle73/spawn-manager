@@ -206,13 +206,7 @@ package body Spawn.Pool is
               & Anet.Util.Random_String (Len => 8);
          begin
             if not Anet.Sockets.Unix.Is_Valid (Path => Addr) then
-               if Socket_Dir (Socket_Dir'First) = '/' then
-                  raise Pool_Error with "UNIX path too long '" & Addr & "'";
-               else
-                  raise Pool_Error with "UNIX path too long '" & Addr
-                    & "' relative to '"
-                    & Ada.Directories.Current_Directory & "'";
-               end if;
+               raise Pool_Error with "UNIX path too long '" & Addr & "'";
             end if;
 
             Args := GNAT.OS_Lib.Argument_String_To_List
