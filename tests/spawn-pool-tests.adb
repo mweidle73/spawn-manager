@@ -106,19 +106,24 @@ package body Spawn.Pool.Tests is
 
       declare
          Log_Data      : constant String := To_String (Test_Buffer);
-         Address_First : constant Natural := Ada.Strings.Fixed.Index
+         Prefix_First  : Natural;
+         Address_First : Natural;
+         Newline       : Natural;
+      begin
+         Prefix_First := Ada.Strings.Fixed.Index
            (Source  => Log_Data,
-            Pattern => Log_Prefix) + Log_Prefix'Length;
-         Address_Last  : constant Natural := Ada.Strings.Fixed.Index
+            Pattern => Log_Prefix);
+         Assert (Condition => Prefix_First > 0,
+                 Message   => "Manager socket address not logged");
+         Address_First := Prefix_First + Log_Prefix'Length;
+         Newline := Ada.Strings.Fixed.Index
            (Source  => Log_Data,
             Pattern => (1 => ASCII.LF),
-            From    => Address_First) - 1;
-      begin
-         Assert (Condition => Address_First > Log_Prefix'Length
-                   and then Address_Last >= Address_First,
-                 Message   => "Manager socket address not logged");
+            From    => Address_First);
+         Assert (Condition => Newline > Address_First,
+                 Message   => "Manager socket address not terminated");
          Socket_Path := To_Unbounded_String
-           (Log_Data (Address_First .. Address_Last));
+           (Log_Data (Address_First .. Newline - 1));
       end;
 
       --  The manager changes its cwd for the command. A relative socket path
@@ -142,10 +147,10 @@ package body Spawn.Pool.Tests is
 
    exception
       when others =>
+         Test_Buffer := Null_Unbounded_String;
          if Initialized then
             Spawn.Pool.Cleanup;
          end if;
-         Test_Buffer := Null_Unbounded_String;
          Remove_Test_Directory;
          raise;
    end Cleanup_Relative_Socket;
