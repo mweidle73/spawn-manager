@@ -45,10 +45,6 @@ package body Spawn.Pool is
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
 
-   function Resolved_Path (Path : String) return String;
-   --  Return the absolute spelling of Path relative to the pool's stable
-   --  working directory.
-
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
       Element_Type => Socket_Container);
@@ -243,10 +239,12 @@ package body Spawn.Pool is
                   Path   => Anet.Sockets.Unix.Path_Type (Addr),
                   Count  => 5);
                Sockets.Insert_Socket
-                 (S => (Address   => To_Unbounded_String (Addr),
-                        Pid       => Pid,
-                        Socket    => Sock,
-                        Available => True));
+                 (S => (Address         => To_Unbounded_String (Addr),
+                        Cleanup_Address => To_Unbounded_String
+                          (Ada.Directories.Full_Name (Name => Addr)),
+                        Pid             => Pid,
+                        Socket          => Sock,
+                        Available       => True));
                L (Msg => "Socket " & Addr & " ready");
             exception
                when others =>
@@ -300,24 +298,9 @@ package body Spawn.Pool is
    exception
       when E : Anet.OS.IO_Error =>
          L (Msg => "Unable to remove manager socket '"
-            & Resolved_Path (Path => Filename) & "': "
+            & Filename & "': "
             & Ada.Exceptions.Exception_Message (X => E));
    end Remove_Socket_File;
-
-   -------------------------------------------------------------------------
-
-   function Resolved_Path (Path : String) return String
-   is
-      Current_Dir : constant String := Ada.Directories.Current_Directory;
-   begin
-      if Path (Path'First) = '/' then
-         return Path;
-      elsif Current_Dir = "/" then
-         return Current_Dir & Path;
-      else
-         return Current_Dir & "/" & Path;
-      end if;
-   end Resolved_Path;
 
    -------------------------------------------------------------------------
 
@@ -400,11 +383,12 @@ package body Spawn.Pool is
             end case;
 
             E.Socket.Close;
-            --  A manager may have changed its current directory while using
-            --  a relative address. Remove the stored address from the pool's
-            --  stable working directory after the manager has terminated. A
+            --  Keep the short transport address separate from the absolute
+            --  cleanup address captured during Init. The manager and caller
+            --  may both have changed their current directories by now. A
             --  failed unlink must not prevent cleanup of the other managers.
-            Remove_Socket_File (Filename => To_String (E.Address));
+            Remove_Socket_File
+              (Filename => To_String (E.Cleanup_Address));
             Free (X => E.Socket);
             SOMP.Next (Position => Pos);
          end loop;

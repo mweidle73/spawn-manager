@@ -86,11 +86,13 @@ package body Spawn.Pool.Tests is
    is
       use Ada.Directories;
 
-      Dir : constant String := "obj/relative-socket-"
+      Dir               : constant String := "obj/relative-socket-"
         & Anet.Util.Random_String (Len => 8);
-      Log_Prefix  : constant String := "Forked manager ";
-      Socket_Path : Unbounded_String;
-      Initialized : Boolean := False;
+      Log_Prefix        : constant String := "Forked manager ";
+      Socket_Path       : Unbounded_String;
+      Original_Dir      : constant String := Current_Directory;
+      Initialized       : Boolean := False;
+      Directory_Changed : Boolean := False;
 
       procedure Remove_Test_Directory;
       procedure Remove_Test_Directory
@@ -129,12 +131,17 @@ package body Spawn.Pool.Tests is
            (Log_Data (Address_First .. Newline - 1));
       end;
 
-      --  The manager changes its cwd for the command. A relative socket path
-      --  must still be removed from the directory where it was bound.
+      --  The manager changes its cwd for the command. The parent then changes
+      --  its cwd before cleanup. A relative socket path must still be removed
+      --  from the directory where it was bound during Init.
       Spawn.Pool.Execute (Command   => "/bin/true",
                           Directory => "/tmp");
+      Set_Directory (Directory => "/tmp");
+      Directory_Changed := True;
       Spawn.Pool.Cleanup;
       Initialized := False;
+      Set_Directory (Directory => Original_Dir);
+      Directory_Changed := False;
 
       begin
          Anet.OS.Delete_File
@@ -151,6 +158,10 @@ package body Spawn.Pool.Tests is
    exception
       when others =>
          Test_Buffer := Null_Unbounded_String;
+         if Directory_Changed then
+            Set_Directory (Directory => Original_Dir);
+            Directory_Changed := False;
+         end if;
          if Initialized then
             Spawn.Pool.Cleanup;
          end if;

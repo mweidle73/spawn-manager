@@ -57,7 +57,9 @@ package Spawn.Pool is
    --  duration to wait for the appearance of each (1 .. Manager_Count)
    --  communication sockets. If a timeout occurs, an exception is raised.
    --  The Buffer_Size argument specifies the size of the command buffer used
-   --  in the spawned managers to receive commands.
+   --  in the spawned managers to receive commands. Relative socket addresses
+   --  are resolved during Init so Cleanup remains independent of later
+   --  changes to the caller's current directory.
 
    procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
 
@@ -84,10 +86,11 @@ private
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
    type Socket_Container is record
-      Address   : Unbounded_String;
-      Pid       : GNAT.Expect.Process_Descriptor;
-      Socket    : Socket_Handle;
-      Available : Boolean;
+      Address         : Unbounded_String;
+      Cleanup_Address : Unbounded_String;
+      Pid             : GNAT.Expect.Process_Descriptor;
+      Socket          : Socket_Handle;
+      Available       : Boolean;
    end record;
 
    function Send_Receive
