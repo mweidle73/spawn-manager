@@ -5,12 +5,14 @@ project Spawn_Common is
    for Source_Dirs use ();
    Source_Dirs := ("src");
 
+   Adaflags := External_As_List ("ADAFLAGS", " ");
+
    Compiler_Switches := ("-gnatygAdISuxo",
                          "-gnatVa",
                          "-gnatf",
                          "-fstack-check",
                          "-gnato",
-                         "-g");
+                         "-g") & Adaflags;
 
    Binder_Switches   := ("-E");
 
