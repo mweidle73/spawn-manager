@@ -21,12 +21,16 @@
 --  License.
 --
 
+with Ada.Unchecked_Conversion;
+
 package body Spawn.Protocol is
 
    use type Ada.Streams.Stream_Element_Array;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
+   use type Interfaces.Unsigned_64;
 
    Magic : constant Ada.Streams.Stream_Element_Array (1 .. 4)
      := (Character'Pos ('S'),
@@ -35,6 +39,26 @@ package body Spawn.Protocol is
          Character'Pos ('N'));
 
    Protocol_Version : constant Interfaces.Unsigned_16 := 1;
+
+   function To_Integer_64 is new Ada.Unchecked_Conversion
+     (Source => Interfaces.Unsigned_64,
+      Target => Interfaces.Integer_64);
+
+   function To_Unsigned_64 is new Ada.Unchecked_Conversion
+     (Source => Interfaces.Integer_64,
+      Target => Interfaces.Unsigned_64);
+
+   function Decode_I64
+     (Data  : Ada.Streams.Stream_Element_Array;
+      First : Ada.Streams.Stream_Element_Offset)
+      return Interfaces.Integer_64;
+   --  Decode one two's-complement big-endian signed 64-bit field at First.
+
+   procedure Decode_String
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Value  : out Ada.Strings.Unbounded.Unbounded_String);
+   --  Decode one bounded non-NUL string and advance Cursor.
 
    function Decode_U16
      (Data  : Ada.Streams.Stream_Element_Array;
@@ -54,6 +78,18 @@ package body Spawn.Protocol is
       First :     Ada.Streams.Stream_Element_Offset);
    --  Encode one big-endian unsigned 16-bit field at First.
 
+   procedure Encode_I64
+     (Value :     Interfaces.Integer_64;
+      Data  : in out Ada.Streams.Stream_Element_Array;
+      First :     Ada.Streams.Stream_Element_Offset);
+   --  Encode one two's-complement big-endian signed 64-bit field at First.
+
+   procedure Encode_String
+     (Value  :     Ada.Strings.Unbounded.Unbounded_String;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset);
+   --  Encode one validated string and advance Cursor.
+
    procedure Encode_U32
      (Value :     Interfaces.Unsigned_32;
       Data  : in out Ada.Streams.Stream_Element_Array;
@@ -69,6 +105,11 @@ package body Spawn.Protocol is
      (Kind : Message_Kind)
       return Interfaces.Unsigned_16;
    --  Return the assigned version 1 value for Kind.
+
+   function String_Field_Length
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+      return Positive;
+   --  Return the encoded string length after validating its semantic bound.
 
    procedure Decode_Header
      (Data         :     Ada.Streams.Stream_Element_Array;
@@ -101,6 +142,111 @@ package body Spawn.Protocol is
          null;
       end;
    end Decode_Header;
+
+   -------------------------------------------------------------------------
+
+   function Decode_I64
+     (Data  : Ada.Streams.Stream_Element_Array;
+      First : Ada.Streams.Stream_Element_Offset)
+      return Interfaces.Integer_64
+   is
+      Value : Interfaces.Unsigned_64 := 0;
+   begin
+      for Offset in 0 .. 7 loop
+         Value := Interfaces.Shift_Left (Value => Value, Amount => 8)
+           or Interfaces.Unsigned_64
+             (Data (First + Ada.Streams.Stream_Element_Offset (Offset)));
+      end loop;
+      return To_Integer_64 (Value);
+   end Decode_I64;
+
+   -------------------------------------------------------------------------
+
+   procedure Decode_Shell_Request
+     (Data         :     Ada.Streams.Stream_Element_Array;
+      Active_Bound :     Positive;
+      Request      : out Shell_Request_Type)
+   is
+      Header : Header_Type;
+      Cursor : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+      Raw_Timeout : Interfaces.Integer_64;
+   begin
+      if Data'Length < Header_Size then
+         raise Protocol_Error with "shell frame shorter than header";
+      end if;
+      Decode_Header
+        (Data         => Data (Data'First .. Data'First + Header_Size - 1),
+         Active_Bound => Active_Bound,
+         Header       => Header);
+      if Header.Kind /= Shell_Request then
+         raise Protocol_Error with "shell request has wrong message kind";
+      end if;
+      if Frame_Length
+        (Payload_Length => Header.Payload_Length,
+         Active_Bound   => Active_Bound) /= Data'Length
+      then
+         raise Protocol_Error with "shell frame length mismatch";
+      end if;
+
+      Decode_String (Data => Data, Cursor => Cursor, Value => Request.Command);
+      Decode_String
+        (Data   => Data,
+         Cursor => Cursor,
+         Value  => Request.Directory);
+      if Data'Last - Cursor + 1 < 8 then
+         raise Protocol_Error with "truncated shell timeout";
+      end if;
+      Raw_Timeout := Decode_I64 (Data => Data, First => Cursor);
+      Cursor := Cursor + 8;
+      if Raw_Timeout < -1 then
+         raise Request_Error with "invalid shell timeout";
+      end if;
+      Request.Timeout := Timeout_Milliseconds (Raw_Timeout);
+      if Cursor /= Data'Last + 1 then
+         raise Protocol_Error with "trailing shell payload bytes";
+      end if;
+   end Decode_Shell_Request;
+
+   -------------------------------------------------------------------------
+
+   procedure Decode_String
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Value  : out Ada.Strings.Unbounded.Unbounded_String)
+   is
+      Length : Natural;
+   begin
+      if Data'Last - Cursor + 1 < 4 then
+         raise Protocol_Error with "truncated string length";
+      end if;
+      declare
+         Raw_Length : constant Interfaces.Unsigned_32
+           := Decode_U32 (Data => Data, First => Cursor);
+      begin
+         if Raw_Length > Maximum_String_Size then
+            raise Request_Error with "string exceeds protocol bound";
+         end if;
+         Length := Natural (Raw_Length);
+      end;
+      Cursor := Cursor + 4;
+      if Data'Last - Cursor + 1 < Ada.Streams.Stream_Element_Offset (Length)
+      then
+         raise Protocol_Error with "truncated string data";
+      end if;
+      declare
+         Result : String (1 .. Length);
+      begin
+         for Index in Result'Range loop
+            Result (Index) := Character'Val (Data (Cursor));
+            if Result (Index) = ASCII.NUL then
+               raise Request_Error with "string contains NUL";
+            end if;
+            Cursor := Cursor + 1;
+         end loop;
+         Value := Ada.Strings.Unbounded.To_Unbounded_String (Result);
+      end;
+   end Decode_String;
 
    -------------------------------------------------------------------------
 
@@ -166,6 +312,84 @@ package body Spawn.Protocol is
          Data  => Data,
          First => First + 8);
    end Encode_Header;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_I64
+     (Value :     Interfaces.Integer_64;
+      Data  : in out Ada.Streams.Stream_Element_Array;
+      First :     Ada.Streams.Stream_Element_Offset)
+   is
+      Raw : constant Interfaces.Unsigned_64 := To_Unsigned_64 (Value);
+   begin
+      for Offset in 0 .. 7 loop
+         Data (First + Ada.Streams.Stream_Element_Offset (Offset))
+           := Ada.Streams.Stream_Element
+             (Interfaces.Shift_Right
+                (Value  => Raw,
+                 Amount => (7 - Offset) * 8)
+              and 16#ff#);
+      end loop;
+   end Encode_I64;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_Shell_Request
+     (Request      :     Shell_Request_Type;
+      Active_Bound :     Positive;
+      Data         : in out Ada.Streams.Stream_Element_Array)
+   is
+      Length : constant Positive := Shell_Request_Frame_Length
+        (Request      => Request,
+         Active_Bound => Active_Bound);
+      Cursor : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+   begin
+      if Data'Length /= Length then
+         raise Protocol_Error with "shell frame buffer length mismatch";
+      end if;
+      Encode_Header
+        (Header =>
+           (Kind           => Shell_Request,
+            Payload_Length => Interfaces.Unsigned_32 (Length - Header_Size)),
+         Data   => Data);
+      Encode_String
+        (Value  => Request.Command,
+         Data   => Data,
+         Cursor => Cursor);
+      Encode_String
+        (Value  => Request.Directory,
+         Data   => Data,
+         Cursor => Cursor);
+      Encode_I64 (Value => Request.Timeout, Data => Data, First => Cursor);
+      Cursor := Cursor + 8;
+      if Cursor /= Data'Last + 1 then
+         raise Program_Error with "shell frame length calculation differs";
+      end if;
+   end Encode_Shell_Request;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_String
+     (Value  :     Ada.Strings.Unbounded.Unbounded_String;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset)
+   is
+      Source : constant String := Ada.Strings.Unbounded.To_String (Value);
+      Ignored : constant Positive := String_Field_Length (Value => Value);
+      pragma Unreferenced (Ignored);
+   begin
+      Encode_U32
+        (Value => Interfaces.Unsigned_32 (Source'Length),
+         Data  => Data,
+         First => Cursor);
+      Cursor := Cursor + 4;
+      for Item of Source loop
+         Data (Cursor) := Ada.Streams.Stream_Element
+           (Character'Pos (Item));
+         Cursor := Cursor + 1;
+      end loop;
+   end Encode_String;
 
    -------------------------------------------------------------------------
 
@@ -245,6 +469,43 @@ package body Spawn.Protocol is
          when Result_Message => return 3;
       end case;
    end Kind_To_Wire;
+
+   -------------------------------------------------------------------------
+
+   function Shell_Request_Frame_Length
+     (Request      : Shell_Request_Type;
+      Active_Bound : Positive)
+      return Positive
+   is
+      Payload_Length : Natural := 8;
+   begin
+      Payload_Length := Payload_Length
+        + String_Field_Length (Value => Request.Command);
+      Payload_Length := Payload_Length
+        + String_Field_Length (Value => Request.Directory);
+      return Frame_Length
+        (Payload_Length => Interfaces.Unsigned_32 (Payload_Length),
+         Active_Bound   => Active_Bound);
+   end Shell_Request_Frame_Length;
+
+   -------------------------------------------------------------------------
+
+   function String_Field_Length
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+      return Positive
+   is
+      Source : constant String := Ada.Strings.Unbounded.To_String (Value);
+   begin
+      if Source'Length > Maximum_String_Size then
+         raise Request_Error with "string exceeds protocol bound";
+      end if;
+      for Item of Source loop
+         if Item = ASCII.NUL then
+            raise Request_Error with "string contains NUL";
+         end if;
+      end loop;
+      return 4 + Source'Length;
+   end String_Field_Length;
 
    -------------------------------------------------------------------------
 

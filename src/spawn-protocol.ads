@@ -22,6 +22,7 @@
 --
 
 with Ada.Streams;
+with Ada.Strings.Unbounded;
 with Interfaces;
 
 package Spawn.Protocol is
@@ -39,6 +40,15 @@ package Spawn.Protocol is
       Payload_Length : Interfaces.Unsigned_32;
    end record;
 
+   subtype Timeout_Milliseconds is Interfaces.Integer_64
+     range Interfaces.Integer_64 (-1) .. Interfaces.Integer_64'Last;
+
+   type Shell_Request_Type is record
+      Command   : Ada.Strings.Unbounded.Unbounded_String;
+      Directory : Ada.Strings.Unbounded.Unbounded_String;
+      Timeout   : Timeout_Milliseconds;
+   end record;
+
    procedure Decode_Header
      (Data         :     Ada.Streams.Stream_Element_Array;
       Active_Bound :     Positive;
@@ -50,15 +60,34 @@ package Spawn.Protocol is
       Data   : in out Ada.Streams.Stream_Element_Array);
    --  Encode Header into the first Header_Size bytes of Data.
 
+   procedure Decode_Shell_Request
+     (Data         :     Ada.Streams.Stream_Element_Array;
+      Active_Bound :     Positive;
+      Request      : out Shell_Request_Type);
+   --  Decode one exact shell-request frame without accepting trailing bytes.
+
+   procedure Encode_Shell_Request
+     (Request      :     Shell_Request_Type;
+      Active_Bound :     Positive;
+      Data         : in out Ada.Streams.Stream_Element_Array);
+   --  Encode one shell request into an exactly sized bounded Data array.
+
    function Frame_Length
      (Payload_Length : Interfaces.Unsigned_32;
       Active_Bound   : Positive)
       return Positive;
    --  Return the complete bounded frame length or raise Protocol_Error.
 
+   function Shell_Request_Frame_Length
+     (Request      : Shell_Request_Type;
+      Active_Bound : Positive)
+      return Positive;
+   --  Return the exact encoded shell-request frame length.
+
    procedure Validate_Active_Bound (Active_Bound : Positive);
    --  Reject an active frame bound outside Header_Size .. Maximum_Frame_Size.
 
    Protocol_Error : exception;
+   Request_Error  : exception;
 
 end Spawn.Protocol;
