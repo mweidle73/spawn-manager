@@ -27,6 +27,9 @@ package Spawn.Transport.Tests is
 
    type Testcase is new Ahven.Framework.Test_Case with null record;
 
+   procedure Close_On_Exec_Flag;
+   --  Verify control descriptors receive the close-on-exec flag.
+
    procedure Completion_Timeout;
    --  Verify the deadline starts with the first byte and bounds all others.
 

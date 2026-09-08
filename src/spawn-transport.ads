@@ -45,6 +45,9 @@ package Spawn.Transport is
       Timeout_MS : Positive := Frame_Completion_Timeout_MS);
    --  Send exactly one frame through a nonblocking stream socket.
 
+   procedure Set_Close_On_Exec (Descriptor : Interfaces.C.int);
+   --  Prevent a control socket from crossing a later exec boundary.
+
    Extra_Data       : exception;
    Peer_Closed      : exception;
    Transport_Error  : exception;

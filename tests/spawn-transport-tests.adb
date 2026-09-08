@@ -101,6 +101,29 @@ package body Spawn.Transport.Tests is
    procedure Z_Set_Nonblocking (Descriptor : C.int);
    procedure Z_Set_Send_Buffer (Descriptor : C.int; Size : Positive);
 
+   procedure Close_On_Exec_Flag
+   is
+      F_Getfd     : constant := 1;
+      Descriptors : Descriptor_Array;
+      Flags       : C.int;
+   begin
+      Z_Open_Pair (Descriptors => Descriptors);
+      Set_Close_On_Exec (Descriptor => Descriptors (0));
+      Flags := C_Fcntl
+        (Descriptor => Descriptors (0),
+         Command    => F_Getfd,
+         Argument   => 0);
+      Assert (Condition => Flags >= 0 and then Flags mod 2 = 1,
+              Message   => "close-on-exec flag not set");
+      Z_Close_Pair (Descriptors => Descriptors);
+   exception
+      when others =>
+         Z_Close_Pair (Descriptors => Descriptors);
+         raise;
+   end Close_On_Exec_Flag;
+
+   -------------------------------------------------------------------------
+
    procedure Completion_Timeout
    is
       Descriptors : Descriptor_Array;
@@ -277,6 +300,9 @@ package body Spawn.Transport.Tests is
    is
    begin
       T.Set_Name (Name => "Spawn transport tests");
+      T.Add_Test_Routine
+        (Routine => Close_On_Exec_Flag'Access,
+         Name    => "Set close-on-exec flag");
       T.Add_Test_Routine
         (Routine => Send_And_Receive'Access,
          Name    => "Send and receive exact frame");

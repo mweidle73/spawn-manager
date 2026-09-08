@@ -139,6 +139,8 @@ begin
    end if;
 
    Sock_Listen.Init;
+   Spawn.Transport.Set_Close_On_Exec
+     (Descriptor => Sock_Listen.Get_Socket);
 
    declare
       Signal_Handler : Spawn.Signals.Exit_Handler_Type
@@ -216,6 +218,8 @@ begin
       Sock_Listen.Listen;
 
       Sock_Listen.Accept_Connection (New_Socket => Sock_Comm);
+      Spawn.Transport.Set_Close_On_Exec
+        (Descriptor => Sock_Comm.Get_Socket);
       Sock_Comm.Set_Nonblocking_Mode;
       pragma Debug (L.Log_File ("Connection established"));
 

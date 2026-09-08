@@ -334,6 +334,8 @@ package body Spawn.Pool is
                  := new Anet.Sockets.Unix.TCP_Socket_Type;
             begin
                Sock.Init;
+               Spawn.Transport.Set_Close_On_Exec
+                 (Descriptor => Sock.Get_Socket);
                Connect_Retry_On_Refused
                  (Socket => Sock,
                   Path   => Anet.Sockets.Unix.Path_Type (Addr),

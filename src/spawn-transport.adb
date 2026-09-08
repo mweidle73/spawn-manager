@@ -57,6 +57,15 @@ package body Spawn.Transport is
           Convention    => C,
           External_Name => "poll";
 
+   function C_Fcntl
+     (Descriptor : C.int;
+      Command    : C.int;
+      Argument   : C.int)
+      return C.int
+     with Import,
+          Convention    => C,
+          External_Name => "fcntl";
+
    function C_Recv
      (Descriptor : C.int;
       Buffer     : System.Address;
@@ -371,6 +380,32 @@ package body Spawn.Transport is
          end if;
       end loop;
    end Send_Frame;
+
+   -------------------------------------------------------------------------
+
+   procedure Set_Close_On_Exec (Descriptor : C.int)
+   is
+      F_Getfd    : constant := 1;
+      F_Setfd    : constant := 2;
+      Fd_Cloexec : constant := 1;
+      Flags      : C.int;
+   begin
+      Flags := C_Fcntl
+        (Descriptor => Descriptor,
+         Command    => F_Getfd,
+         Argument   => 0);
+      if Flags < 0 then
+         Raise_OS_Error (Operation => "fcntl get descriptor flags");
+      end if;
+      if Flags mod 2 = 0
+        and then C_Fcntl
+          (Descriptor => Descriptor,
+           Command    => F_Setfd,
+           Argument   => Flags + Fd_Cloexec) < 0
+      then
+         Raise_OS_Error (Operation => "fcntl set close-on-exec");
+      end if;
+   end Set_Close_On_Exec;
 
    -------------------------------------------------------------------------
 
