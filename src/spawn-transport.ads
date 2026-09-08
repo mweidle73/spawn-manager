@@ -31,7 +31,8 @@ package Spawn.Transport is
    function Receive_Frame
      (Descriptor            : Interfaces.C.int;
       Active_Bound          : Positive;
-      First_Byte_Timeout_MS : Integer := -1;
+      First_Byte_Timeout_MS : Interfaces.Integer_64
+        := Interfaces.Integer_64 (-1);
       Completion_Timeout_MS : Positive := Frame_Completion_Timeout_MS)
       return Ada.Streams.Stream_Element_Array;
    --  Receive exactly one bounded frame from a nonblocking stream socket.

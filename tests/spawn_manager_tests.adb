@@ -27,8 +27,10 @@
 --  executable file might be covered by the GNU Public License.
 --
 
+with Ada.Directories;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
+with Ada.Text_IO;
 with Interfaces;
 
 with Anet.Sockets;
@@ -139,6 +141,90 @@ package body Spawn_Manager_Tests is
                  Message   => "exit result expected");
          Assert (Condition => Result.Exit_Status = 0,
                  Message   => "zero exit status expected");
+      end;
+
+      declare
+         Current_Directory : constant String
+           := Ada.Directories.Current_Directory;
+         Stdout_Path : constant String
+           := Current_Directory & "/obj/manager-structured.stdout";
+         Stderr_Path : constant String
+           := Current_Directory & "/obj/manager-structured.stderr";
+         Request : Spawn.Protocol.Exec_Request_Type;
+         Result  : Spawn.Protocol.Result_Type;
+      begin
+         if Ada.Directories.Exists (Name => Stdout_Path) then
+            Ada.Directories.Delete_File (Name => Stdout_Path);
+         end if;
+         if Ada.Directories.Exists (Name => Stderr_Path) then
+            Ada.Directories.Delete_File (Name => Stderr_Path);
+         end if;
+         Request.Executable := To_Unbounded_String
+           (Current_Directory & "/obj/spawn_posix_tests");
+         Request.Arguments.Append ("fixture");
+         Request.Arguments.Append ("verify");
+         Request.Arguments.Append ("");
+         Request.Arguments.Append
+           ("space" & ASCII.HT & "quote'""\glob*?[$(not-shell)]");
+         Request.Environment.Append
+           ((Name  => To_Unbounded_String ("ONLY"),
+             Value => To_Unbounded_String ("visible value")));
+         Request.Environment.Append
+           ((Name  => To_Unbounded_String ("EXPECTED_CWD"),
+             Value => To_Unbounded_String (Current_Directory)));
+         Request.Directory := To_Unbounded_String (Current_Directory);
+         Request.Standard_Output :=
+           (Mode => Spawn.Protocol.Truncate_File,
+            Path => To_Unbounded_String (Stdout_Path));
+         Request.Standard_Error :=
+           (Mode => Spawn.Protocol.Truncate_File,
+            Path => To_Unbounded_String (Stderr_Path));
+         Request.Timeout := 1_000;
+         declare
+            Length : constant Positive
+              := Spawn.Protocol.Exec_Request_Frame_Length
+                (Request      => Request,
+                 Active_Bound => 8_192);
+            Data : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         begin
+            Spawn.Protocol.Encode_Exec_Request
+              (Request      => Request,
+               Active_Bound => 8_192,
+               Data         => Data);
+            Spawn.Transport.Send_Frame
+              (Descriptor => Socket.Get_Socket,
+               Data       => Data);
+         end;
+         Result := Receive_Result;
+         Assert
+           (Condition => Result.Kind = Spawn.Protocol.Exited
+              and then Result.Exit_Status = 0,
+            Message   => "structured manager request failed");
+         declare
+            Output : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Open
+              (File => Output,
+               Mode => Ada.Text_IO.In_File,
+               Name => Stdout_Path);
+            Assert
+              (Condition => Ada.Text_IO.Get_Line (File => Output)
+                 = "verified stdout",
+               Message   => "structured stdout differs");
+            Ada.Text_IO.Close (File => Output);
+            Ada.Text_IO.Open
+              (File => Output,
+               Mode => Ada.Text_IO.In_File,
+               Name => Stderr_Path);
+            Assert
+              (Condition => Ada.Text_IO.Get_Line (File => Output)
+                 = "verified stderr",
+               Message   => "structured stderr differs");
+            Ada.Text_IO.Close (File => Output);
+         end;
+         Ada.Directories.Delete_File (Name => Stdout_Path);
+         Ada.Directories.Delete_File (Name => Stderr_Path);
       end;
 
       declare

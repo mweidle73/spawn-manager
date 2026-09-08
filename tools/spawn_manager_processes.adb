@@ -78,6 +78,54 @@ package body Spawn_Manager_Processes is
    procedure Require_C_String (Value : String; Name : String);
    --  Reject a value which cannot be represented by a C string.
 
+   function Create_Exec_Request
+     (Request : Spawn.Protocol.Exec_Request_Type)
+      return Execution_Request
+   is
+      Arguments   : String_Vectors.Vector;
+      Environment : Environment_Vectors.Vector;
+
+      function Convert
+        (Stream : Spawn.Protocol.Stream_Specification_Type)
+         return Stream_Specification;
+      --  Convert the two fixed protocol stream alternatives.
+
+      function Convert
+        (Stream : Spawn.Protocol.Stream_Specification_Type)
+         return Stream_Specification
+      is
+      begin
+         case Stream.Mode is
+            when Spawn.Protocol.Null_Stream =>
+               return (Mode => Null_Stream, Path => <>);
+            when Spawn.Protocol.Truncate_File =>
+               return
+                 (Mode => Truncate_File,
+                  Path => Stream.Path);
+         end case;
+      end Convert;
+   begin
+      for Argument of Request.Arguments loop
+         Arguments.Append (Argument);
+      end loop;
+      for Item of Request.Environment loop
+         Environment.Append
+           ((Name  => Item.Name,
+             Value => Item.Value));
+      end loop;
+      return
+        (Executable      => Request.Executable,
+         Arguments       => Arguments,
+         Environment     => Environment,
+         Environment_Use => Replace,
+         Directory       => Request.Directory,
+         Standard_Output => Convert (Request.Standard_Output),
+         Standard_Error  => Convert (Request.Standard_Error),
+         Timeout_MS      => Request.Timeout);
+   end Create_Exec_Request;
+
+   -------------------------------------------------------------------------
+
    function Create_Shell_Request
      (Command   : String;
       Directory : String;

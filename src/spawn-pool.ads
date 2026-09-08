@@ -76,6 +76,19 @@ package Spawn.Pool is
    --  timeout (-1)). If a timeout occurs, a Command_Failed exception is raised
    --  to indicate failure.
 
+   function Execute
+     (Request   : Spawn.Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
+      return Spawn.Protocol.Result_Type;
+   --  Execute one structured request and return its exact termination result.
+
+   procedure Execute_Checked
+     (Request   : Spawn.Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
+   --  Execute one structured request and raise unless it exits with status 0.
+
    procedure Cleanup;
    --  Cleanup spawn pool.
 
@@ -98,7 +111,7 @@ private
    function Send_Receive
      (Cont    : Socket_Container;
       Request : Ada.Streams.Stream_Element_Array;
-      First_Byte_Timeout_MS : Integer)
+      First_Byte_Timeout_MS : Spawn.Protocol.Timeout_Milliseconds)
       return Spawn.Protocol.Result_Type;
    --  Exchange one exact frame and release Cont only after a valid result.
 

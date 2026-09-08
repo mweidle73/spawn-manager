@@ -35,10 +35,10 @@ package body Spawn.Transport is
    package C renames Interfaces.C;
 
    use type Ada.Real_Time.Time;
-   use type Ada.Real_Time.Time_Span;
    use type Ada.Streams.Stream_Element_Offset;
    use type C.int;
    use type C.long;
+   use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_16;
 
    type Poll_Item_Type is record
@@ -78,14 +78,16 @@ package body Spawn.Transport is
           External_Name => "send";
 
    type Deadline_Type is record
-      Infinite : Boolean;
-      Expires  : Ada.Real_Time.Time;
+      Started    : Ada.Real_Time.Time;
+      Timeout_MS : Interfaces.Integer_64;
    end record;
 
    function Has_Event (Returned : C.short; Event : Integer) return Boolean;
    --  Return True if poll reported Event.
 
-   function Make_Deadline (Timeout_MS : Integer) return Deadline_Type;
+   function Make_Deadline
+     (Timeout_MS : Interfaces.Integer_64)
+      return Deadline_Type;
    --  Construct a monotonic deadline, with -1 denoting no deadline.
 
    procedure Raise_OS_Error (Operation : String);
@@ -123,20 +125,17 @@ package body Spawn.Transport is
 
    -------------------------------------------------------------------------
 
-   function Make_Deadline (Timeout_MS : Integer) return Deadline_Type
+   function Make_Deadline
+     (Timeout_MS : Interfaces.Integer_64)
+      return Deadline_Type
    is
    begin
       if Timeout_MS < -1 then
          raise Transport_Error with "invalid transport timeout";
-      elsif Timeout_MS = -1 then
-         return
-           (Infinite => True,
-            Expires  => Ada.Real_Time.Time_First);
       else
          return
-           (Infinite => False,
-            Expires  => Ada.Real_Time.Clock
-              + Ada.Real_Time.Milliseconds (Timeout_MS));
+           (Started    => Ada.Real_Time.Clock,
+            Timeout_MS => Timeout_MS);
       end if;
    end Make_Deadline;
 
@@ -176,7 +175,8 @@ package body Spawn.Transport is
          if Received > 0 then
             if not Started then
                Started := True;
-               Completion_Deadline := Make_Deadline (Completion_MS);
+               Completion_Deadline := Make_Deadline
+                 (Interfaces.Integer_64 (Completion_MS));
             end if;
             Next := Next + Ada.Streams.Stream_Element_Offset (Received);
          elsif Received = 0 then
@@ -194,7 +194,8 @@ package body Spawn.Transport is
    function Receive_Frame
      (Descriptor            : C.int;
       Active_Bound          : Positive;
-      First_Byte_Timeout_MS : Integer := -1;
+      First_Byte_Timeout_MS : Interfaces.Integer_64
+        := Interfaces.Integer_64 (-1);
       Completion_Timeout_MS : Positive := Frame_Completion_Timeout_MS)
       return Ada.Streams.Stream_Element_Array
    is
@@ -206,7 +207,8 @@ package body Spawn.Transport is
       First_Deadline      : constant Deadline_Type
         := Make_Deadline (First_Byte_Timeout_MS);
       Completion_Deadline : Deadline_Type
-        := (Infinite => True, Expires => Ada.Real_Time.Time_First);
+        := (Started    => Ada.Real_Time.Time_First,
+            Timeout_MS => Interfaces.Integer_64 (-1));
    begin
       Read_Exact
         (Descriptor          => Descriptor,
@@ -294,24 +296,30 @@ package body Spawn.Transport is
 
    function Remaining_Timeout (Deadline : Deadline_Type) return C.int
    is
-      Remaining : Ada.Real_Time.Time_Span;
-      Milliseconds : Integer;
+      Elapsed_Duration : Duration;
+      Elapsed_MS       : Interfaces.Integer_64;
+      Remaining_MS     : Interfaces.Integer_64;
    begin
-      if Deadline.Infinite then
+      if Deadline.Timeout_MS = -1 then
          return -1;
       end if;
-      Remaining := Deadline.Expires - Ada.Real_Time.Clock;
-      if Remaining <= Ada.Real_Time.Time_Span_Zero then
-         return 0;
+      Elapsed_Duration := Ada.Real_Time.To_Duration
+        (Ada.Real_Time.Clock - Deadline.Started);
+      if Elapsed_Duration <= 0.0 then
+         Remaining_MS := Deadline.Timeout_MS;
+      else
+         Elapsed_MS := Interfaces.Integer_64 (Elapsed_Duration * 1_000);
+         if Elapsed_MS > 0 then
+            Elapsed_MS := Elapsed_MS - 1;
+         end if;
+         Remaining_MS := Deadline.Timeout_MS - Elapsed_MS;
       end if;
-      if Ada.Real_Time.To_Duration (Remaining)
-        >= Duration (C.int'Last) / 1_000
-      then
+      if Remaining_MS <= 0 then
+         return 0;
+      elsif Remaining_MS > Interfaces.Integer_64 (C.int'Last) then
          return C.int'Last;
       end if;
-      Milliseconds := Integer
-        (Ada.Real_Time.To_Duration (Remaining) * 1_000);
-      return C.int (Integer'Max (1, Milliseconds));
+      return C.int (Remaining_MS);
    end Remaining_Timeout;
 
    -------------------------------------------------------------------------
@@ -324,7 +332,8 @@ package body Spawn.Transport is
       Header : Spawn.Protocol.Header_Type;
       Next   : Ada.Streams.Stream_Element_Offset := Data'First;
       Sent   : C.long;
-      Deadline : constant Deadline_Type := Make_Deadline (Timeout_MS);
+      Deadline : constant Deadline_Type := Make_Deadline
+        (Interfaces.Integer_64 (Timeout_MS));
    begin
       if Data'Length < Spawn.Protocol.Header_Size then
          raise Transport_Error with "outbound frame is shorter than header";

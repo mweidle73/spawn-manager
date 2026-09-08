@@ -35,6 +35,7 @@ with Ada.Real_Time;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Interfaces;
 with Interfaces.C;
 
 with Anet.OS;
@@ -45,7 +46,11 @@ with GNAT.Expect;
 package body Spawn.Pool.Tests is
 
    use Ahven;
+   use type Interfaces.Integer_64;
+   use type Interfaces.Unsigned_32;
    use type Interfaces.C.int;
+   use type Spawn.Protocol.Failure_Stage;
+   use type Spawn.Protocol.Result_Kind;
 
    function Block_Test_Signal return Interfaces.C.int
      with Import,
@@ -628,6 +633,61 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Execute_Structured
+   is
+      Request : Spawn.Protocol.Exec_Request_Type;
+      Result  : Spawn.Protocol.Result_Type;
+   begin
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Request.Executable := To_Unbounded_String ("/bin/true");
+      Request.Directory := To_Unbounded_String ("/");
+      Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Timeout := -1;
+      Result := Spawn.Pool.Execute (Request => Request);
+      Assert
+        (Condition => Result.Kind = Spawn.Protocol.Exited
+           and then Result.Exit_Status = 0,
+         Message   => "structured true result differs");
+
+      Request.Executable := To_Unbounded_String ("/bin/false");
+      Result := Spawn.Pool.Execute (Request => Request);
+      Assert
+        (Condition => Result.Kind = Spawn.Protocol.Exited
+           and then Result.Exit_Status = 1,
+         Message   => "structured false result differs");
+      begin
+         Spawn.Pool.Execute_Checked (Request => Request);
+         Fail (Message => "checked structured failure accepted");
+      exception
+         when Spawn.Pool.Command_Failed => null;
+      end;
+
+      Request.Executable := To_Unbounded_String
+        ("/definitely/missing/structured-target");
+      Result := Spawn.Pool.Execute (Request => Request);
+      Assert
+        (Condition => Result.Kind = Spawn.Protocol.Spawn_Failed
+           and then Result.Failure.Stage = Spawn.Protocol.Exec_Target,
+         Message   => "structured spawn failure differs");
+
+      Request.Executable := To_Unbounded_String ("/bin/sleep");
+      Request.Arguments.Append ("60");
+      Request.Timeout := 50;
+      Result := Spawn.Pool.Execute (Request => Request);
+      Assert (Condition => Result.Kind = Spawn.Protocol.Timed_Out,
+              Message   => "structured timeout result differs");
+
+      Spawn.Pool.Cleanup;
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         raise;
+   end Execute_Structured;
+
+   -------------------------------------------------------------------------
+
    procedure Execute_Working_Directories
    is
       use Ada.Directories;
@@ -727,6 +787,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Execute_Signal_Mask'Access,
          Name    => "Preserve empty child signal mask");
+      T.Add_Test_Routine
+        (Routine => Execute_Structured'Access,
+         Name    => "Execute structured requests");
       T.Add_Test_Routine
         (Routine => Execute_Working_Directories'Access,
          Name    => "Preserve per-request working directories");

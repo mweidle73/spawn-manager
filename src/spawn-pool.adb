@@ -42,6 +42,7 @@ with Spawn.Transport;
 
 package body Spawn.Pool is
 
+   use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
    use type Spawn.Protocol.Result_Kind;
 
@@ -53,7 +54,9 @@ package body Spawn.Pool is
       Element_Type => Socket_Container);
    package SOMP renames Socket_Map_Package;
 
-   function Result_Timeout (Child_Timeout : Integer) return Integer;
+   function Result_Timeout
+     (Child_Timeout : Protocol.Timeout_Milliseconds)
+      return Protocol.Timeout_Milliseconds;
    --  Bound the first result byte after a finite child deadline.
 
    protected Sockets
@@ -141,6 +144,55 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   function Execute
+     (Request   : Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
+      return Protocol.Result_Type
+   is
+   begin
+      declare
+         Length : constant Positive := Protocol.Exec_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Positive (Cmd_Buffer_Size));
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         S : Socket_Container;
+      begin
+         Protocol.Encode_Exec_Request
+           (Request      => Request,
+            Active_Bound => Positive (Cmd_Buffer_Size),
+            Data         => Data);
+         Sockets.Get_Socket (S);
+         Pid_Setup (S.Pid);
+         begin
+            return Send_Receive
+              (Cont                  => S,
+               Request               => Data,
+               First_Byte_Timeout_MS =>
+                 Result_Timeout (Child_Timeout => Request.Timeout));
+         exception
+            when Spawn.Protocol.Protocol_Error
+               | Spawn.Transport.Extra_Data
+               | Spawn.Transport.Peer_Closed
+               | Spawn.Transport.Transport_Error
+               | Spawn.Transport.Transport_Timeout =>
+               return
+                 (Kind       => Protocol.Protocol_Failed,
+                  Diagnostic => To_Unbounded_String
+                    ("manager transport failed"));
+         end;
+      end;
+   exception
+      when Spawn.Protocol.Protocol_Error
+         | Spawn.Protocol.Request_Error =>
+         return
+           (Kind       => Protocol.Request_Rejected,
+            Diagnostic => To_Unbounded_String ("invalid execution request"));
+   end Execute;
+
+   -------------------------------------------------------------------------
+
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
@@ -176,7 +228,8 @@ package body Spawn.Pool is
            (Cont                  => S,
             Request               => Data,
             First_Byte_Timeout_MS =>
-              Result_Timeout (Child_Timeout => Timeout));
+              Result_Timeout
+                (Child_Timeout => Protocol.Timeout_Milliseconds (Timeout)));
       exception
          when Spawn.Protocol.Protocol_Error
             | Spawn.Transport.Extra_Data
@@ -191,6 +244,23 @@ package body Spawn.Pool is
          raise Command_Failed with "Command failed: '" & Command & "'";
       end if;
    end Execute;
+
+   -------------------------------------------------------------------------
+
+   procedure Execute_Checked
+     (Request   : Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
+   is
+      Result : constant Protocol.Result_Type := Execute
+        (Request   => Request,
+         Pid_Setup => Pid_Setup);
+   begin
+      if Result.Kind /= Protocol.Exited or else Result.Exit_Status /= 0 then
+         raise Command_Failed with "Structured command failed ["
+           & Result.Kind'Image & "]";
+      end if;
+   end Execute_Checked;
 
    -------------------------------------------------------------------------
 
@@ -328,19 +398,22 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
-   function Result_Timeout (Child_Timeout : Integer) return Integer
+   function Result_Timeout
+     (Child_Timeout : Protocol.Timeout_Milliseconds)
+      return Protocol.Timeout_Milliseconds
    is
    begin
-      if Child_Timeout < -1 then
-         raise Constraint_Error with "timeout must be -1 or nonnegative";
-      elsif Child_Timeout = -1 then
+      if Child_Timeout = -1 then
          return -1;
       elsif Child_Timeout
-        > Integer'Last - Spawn.Transport.Frame_Completion_Timeout_MS
+        > Protocol.Timeout_Milliseconds'Last
+          - Interfaces.Integer_64
+            (Spawn.Transport.Frame_Completion_Timeout_MS)
       then
-         return Integer'Last;
+         return Protocol.Timeout_Milliseconds'Last;
       else
-         return Child_Timeout + Spawn.Transport.Frame_Completion_Timeout_MS;
+         return Child_Timeout + Interfaces.Integer_64
+           (Spawn.Transport.Frame_Completion_Timeout_MS);
       end if;
    end Result_Timeout;
 
@@ -349,7 +422,7 @@ package body Spawn.Pool is
    function Send_Receive
      (Cont    : Socket_Container;
       Request : Ada.Streams.Stream_Element_Array;
-      First_Byte_Timeout_MS : Integer)
+      First_Byte_Timeout_MS : Protocol.Timeout_Milliseconds)
       return Protocol.Result_Type
    is
       Result : Protocol.Result_Type;

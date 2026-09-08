@@ -141,11 +141,41 @@ begin
    Sock_Listen.Init;
 
    declare
+      Signal_Handler : Spawn.Signals.Exit_Handler_Type
+        (Socket_L => Sock_Listen'Access,
+         Socket_C => Sock_Comm'Access);
+      pragma Unreserve_All_Interrupts;
+
+      function Execute_Request
+        (Request : Spawn_Manager_Processes.Execution_Request)
+         return Spawn_Manager_Processes.Execution_Result;
+      --  Execute either request kind under the same signal-state boundary.
+
       procedure Send_Reply (Result : Spawn.Protocol.Result_Type);
       --  Send one exact structured result frame.
 
       procedure Send_Reply_Protocol_Failure (Diagnostic : String);
       --  Attempt a terminal diagnostic without masking the original error.
+
+      ----------------------------------------------------------------------
+
+      function Execute_Request
+        (Request : Spawn_Manager_Processes.Execution_Request)
+         return Spawn_Manager_Processes.Execution_Result
+      is
+         Result : Spawn_Manager_Processes.Execution_Result;
+      begin
+         Signal_Handler.Set_Running;
+         begin
+            Result := Spawn_Manager_Processes.Execute (Request => Request);
+         exception
+            when others =>
+               Signal_Handler.Stopped;
+               raise;
+         end;
+         Signal_Handler.Stopped;
+         return Result;
+      end Execute_Request;
 
       ----------------------------------------------------------------------
 
@@ -180,10 +210,6 @@ begin
          when others => null;
       end Send_Reply_Protocol_Failure;
 
-      Signal_Handler : Spawn.Signals.Exit_Handler_Type
-        (Socket_L => Sock_Listen'Access,
-         Socket_C => Sock_Comm'Access);
-      pragma Unreserve_All_Interrupts;
    begin
       Sock_Listen.Bind (Path => Anet.Sockets.Unix.Path_Type (S (Socket_Path)));
       pragma Debug (L.Log_File ("Listening on socket " & S (Socket_Path)));
@@ -230,20 +256,12 @@ begin
                         pragma Debug
                           (L.Log_File ("- DIR  ["
                            & S (Wire_Request.Directory) & "]"));
-                        Signal_Handler.Set_Running;
-                        begin
-                           Result := Spawn_Manager_Processes.Execute
-                             (Request =>
-                                Spawn_Manager_Processes.Create_Shell_Request
-                                  (Command   => S (Wire_Request.Command),
-                                   Directory => S (Wire_Request.Directory),
-                                   Timeout   => Wire_Request.Timeout));
-                        exception
-                           when others =>
-                              Signal_Handler.Stopped;
-                              raise;
-                        end;
-                        Signal_Handler.Stopped;
+                        Result := Execute_Request
+                          (Request =>
+                             Spawn_Manager_Processes.Create_Shell_Request
+                               (Command   => S (Wire_Request.Command),
+                                Directory => S (Wire_Request.Directory),
+                                Timeout   => Wire_Request.Timeout));
                         pragma Debug
                           (L.Log_File
                              ("Command result: "
@@ -251,11 +269,35 @@ begin
                         Send_Reply (Result => To_Protocol_Result (Result));
                      end;
                   when Spawn.Protocol.Exec_Request =>
-                     Send_Reply
-                       (Result =>
-                          (Kind       => Spawn.Protocol.Request_Rejected,
-                           Diagnostic => To_Unbounded_String
-                             ("structured exec is not enabled")));
+                     declare
+                        Wire_Request : Spawn.Protocol.Exec_Request_Type;
+                        Result : Spawn_Manager_Processes.Execution_Result;
+                     begin
+                        Spawn.Protocol.Decode_Exec_Request
+                          (Data         => Frame,
+                           Active_Bound => Buffer_Size,
+                           Request      => Wire_Request);
+                        pragma Debug
+                          (L.Log_File ("Structured exec request received:"));
+                        pragma Debug
+                          (L.Log_File ("- EXE  ["
+                           & S (Wire_Request.Executable) & "]"));
+                        pragma Debug
+                          (L.Log_File ("- ARGC ["
+                           & Wire_Request.Arguments.Length'Image & "]"));
+                        pragma Debug
+                          (L.Log_File ("- ENVC ["
+                           & Wire_Request.Environment.Length'Image & "]"));
+                        Result := Execute_Request
+                          (Request =>
+                             Spawn_Manager_Processes.Create_Exec_Request
+                               (Request => Wire_Request));
+                        pragma Debug
+                          (L.Log_File
+                             ("Command result: "
+                              & Spawn_Manager_Processes.Diagnostic (Result)));
+                        Send_Reply (Result => To_Protocol_Result (Result));
+                     end;
                   when Spawn.Protocol.Result_Message =>
                      raise Spawn.Protocol.Protocol_Error with
                        "request used result message kind";

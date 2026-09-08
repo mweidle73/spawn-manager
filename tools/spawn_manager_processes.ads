@@ -26,6 +26,8 @@ with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 with Interfaces;
 
+with Spawn.Protocol;
+
 package Spawn_Manager_Processes is
 
    package String_Vectors is new Ada.Containers.Indefinite_Vectors
@@ -101,6 +103,11 @@ package Spawn_Manager_Processes is
       Timeout   : Interfaces.Integer_64)
       return Execution_Request;
    --  Normalize one compatible shell command to the common launch model.
+
+   function Create_Exec_Request
+     (Request : Spawn.Protocol.Exec_Request_Type)
+      return Execution_Request;
+   --  Normalize one structured request to the common launch model.
 
    function Diagnostic (Result : Execution_Result) return String;
    --  Return a request-data-free diagnostic for manager debug logging.

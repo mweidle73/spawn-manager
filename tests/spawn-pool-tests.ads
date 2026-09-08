@@ -60,6 +60,9 @@ package Spawn.Pool.Tests is
    procedure Execute_Signal_Mask;
    --  Verify the shell child starts without inherited blocked signals.
 
+   procedure Execute_Structured;
+   --  Verify structured results, checked execution and timeout mapping.
+
    procedure Execute_Working_Directories;
    --  Verify per-request directories and reuse after a rejected directory.
 
