@@ -30,6 +30,7 @@
 with Ada.Text_IO;
 with Ada.Exceptions;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Real_Time;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -501,6 +502,84 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Execute_Shell_Environment
+   is
+      package ENV renames Ada.Environment_Variables;
+
+      Name        : constant String := "SPAWN_MANAGER_TEST_ENV";
+      Original    : Unbounded_String;
+      Was_Set     : constant Boolean := ENV.Exists (Name => Name);
+      Initialized : Boolean := False;
+
+      procedure Restore_Environment;
+      --  Restore the caller environment after the manager snapshot test.
+
+      procedure Restore_Environment
+      is
+      begin
+         if Was_Set then
+            ENV.Set (Name => Name, Value => To_String (Original));
+         else
+            ENV.Clear (Name => Name);
+         end if;
+      end Restore_Environment;
+   begin
+      if Was_Set then
+         Original := To_Unbounded_String (ENV.Value (Name => Name));
+      end if;
+      ENV.Set (Name => Name, Value => "manager value");
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Initialized := True;
+
+      --  Later caller mutation must not alter the already running manager.
+
+      ENV.Set (Name => Name, Value => "caller value");
+      Spawn.Pool.Execute
+        (Command => "test ""$" & Name & """ = 'manager value'");
+
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+      Restore_Environment;
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         Restore_Environment;
+         raise;
+   end Execute_Shell_Environment;
+
+   -------------------------------------------------------------------------
+
+   procedure Execute_Shell_Syntax
+   is
+   begin
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Execute
+        (Command => "test ""$(printf '%s' 'a b')"" = 'a b'"
+         & " && test $((2 + 3)) -eq 5");
+
+      begin
+         Spawn.Pool.Execute (Command => "false | true");
+         Fail (Message => "pipefail did not reject the pipeline");
+      exception
+         when Spawn.Pool.Command_Failed => null;
+      end;
+
+      --  A normal command failure does not poison the legacy manager.
+
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         raise;
+   end Execute_Shell_Syntax;
+
+   -------------------------------------------------------------------------
+
    procedure Initialize (T : in out Testcase)
    is
    begin
@@ -520,6 +599,12 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Execute_Nonterminating_Command'Access,
          Name    => "Execute non-terminating command");
+      T.Add_Test_Routine
+        (Routine => Execute_Shell_Environment'Access,
+         Name    => "Preserve shell manager environment");
+      T.Add_Test_Routine
+        (Routine => Execute_Shell_Syntax'Access,
+         Name    => "Preserve shell syntax and pipefail");
       T.Add_Test_Routine
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");

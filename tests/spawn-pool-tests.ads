@@ -51,6 +51,12 @@ package Spawn.Pool.Tests is
    procedure Execute_Nonterminating_Command;
    --  Execute non-terminating command.
 
+   procedure Execute_Shell_Environment;
+   --  Verify that shell requests inherit the manager-start environment.
+
+   procedure Execute_Shell_Syntax;
+   --  Verify Bash evaluation, pipefail and reuse after command failure.
+
    procedure Parallel_Execution;
    --  Verify parallel command execution.
 
