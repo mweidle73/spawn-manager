@@ -30,15 +30,21 @@
 with Ada.Containers.Generic_Array_Sort;
 with Ada.Directories;
 with Ada.Real_Time;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Interfaces;
 
 with GNAT.OS_Lib;
 
 with Spawn.Pool;
+with Spawn.Protocol;
 
 procedure Performance
 is
    use type Ada.Real_Time.Time;
+   use type Interfaces.Integer_64;
+   use type Interfaces.Unsigned_32;
+   use type Spawn.Protocol.Result_Kind;
 
    Loops : constant := 1000;
 
@@ -51,6 +57,9 @@ is
 
    procedure Measure_Manager (Command : String; Label : String);
    --  Measure one command through the current manager pool.
+
+   procedure Measure_Structured;
+   --  Measure direct /bin/true through the complete structured pool path.
 
    procedure Report (Label : String; Samples : in out Sample_Array);
    --  Report mean, median and p95 for one sorted sample arm.
@@ -68,6 +77,36 @@ is
       end loop;
       Report (Label => Label, Samples => Samples);
    end Measure_Manager;
+
+   -------------------------------------------------------------------------
+
+   procedure Measure_Structured
+   is
+      Request : Spawn.Protocol.Exec_Request_Type;
+      Result  : Spawn.Protocol.Result_Type;
+      Samples : Sample_Array (1 .. Loops);
+      Start   : Ada.Real_Time.Time;
+   begin
+      Request.Executable := Ada.Strings.Unbounded.To_Unbounded_String
+        ("/bin/true");
+      Request.Directory := Ada.Strings.Unbounded.To_Unbounded_String ("/");
+      Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Timeout := -1;
+      for Index in Samples'Range loop
+         Start := Ada.Real_Time.Clock;
+         Result := Spawn.Pool.Execute (Request => Request);
+         if Result.Kind /= Spawn.Protocol.Exited
+           or else Result.Exit_Status /= 0
+         then
+            raise Program_Error with "structured benchmark request failed";
+         end if;
+         Samples (Index) := Ada.Real_Time.To_Duration
+           (Ada.Real_Time.Clock - Start);
+      end loop;
+      Report (Label   => "manager structured /bin/true",
+              Samples => Samples);
+   end Measure_Structured;
 
    -------------------------------------------------------------------------
 
@@ -97,6 +136,7 @@ begin
    Measure_Manager
      (Command => "/bin/true",
       Label   => "manager shell /bin/true");
+   Measure_Structured;
 
    declare
       Args    : GNAT.OS_Lib.Argument_List (1 .. 4);
