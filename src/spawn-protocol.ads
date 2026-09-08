@@ -21,6 +21,8 @@
 --  License.
 --
 
+with Ada.Containers.Indefinite_Vectors;
+with Ada.Containers.Vectors;
 with Ada.Streams;
 with Ada.Strings.Unbounded;
 with Interfaces;
@@ -47,6 +49,42 @@ package Spawn.Protocol is
       Command   : Ada.Strings.Unbounded.Unbounded_String;
       Directory : Ada.Strings.Unbounded.Unbounded_String;
       Timeout   : Timeout_Milliseconds;
+   end record;
+
+   package String_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type   => Positive,
+      Element_Type => String);
+
+   type Environment_Entry_Type is record
+      Name  : Ada.Strings.Unbounded.Unbounded_String;
+      Value : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   package Environment_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Environment_Entry_Type);
+
+   type Stream_Mode is (Null_Stream, Truncate_File);
+
+   type Stream_Specification_Type
+     (Mode : Stream_Mode := Null_Stream)
+   is record
+      case Mode is
+         when Null_Stream =>
+            null;
+         when Truncate_File =>
+            Path : Ada.Strings.Unbounded.Unbounded_String;
+      end case;
+   end record;
+
+   type Exec_Request_Type is record
+      Executable      : Ada.Strings.Unbounded.Unbounded_String;
+      Arguments       : String_Vectors.Vector;
+      Environment     : Environment_Vectors.Vector;
+      Directory       : Ada.Strings.Unbounded.Unbounded_String;
+      Standard_Output : Stream_Specification_Type;
+      Standard_Error  : Stream_Specification_Type;
+      Timeout         : Timeout_Milliseconds;
    end record;
 
    type Result_Kind is
@@ -104,6 +142,12 @@ package Spawn.Protocol is
       Header       : out Header_Type);
    --  Decode and validate one complete fixed header against Active_Bound.
 
+   procedure Decode_Exec_Request
+     (Data         :     Ada.Streams.Stream_Element_Array;
+      Active_Bound :     Positive;
+      Request      : out Exec_Request_Type);
+   --  Decode one exact exec-request frame without accepting trailing bytes.
+
    procedure Decode_Result
      (Data         :     Ada.Streams.Stream_Element_Array;
       Active_Bound :     Positive;
@@ -120,6 +164,12 @@ package Spawn.Protocol is
      (Header :     Header_Type;
       Data   : in out Ada.Streams.Stream_Element_Array);
    --  Encode Header into the first Header_Size bytes of Data.
+
+   procedure Encode_Exec_Request
+     (Request      :     Exec_Request_Type;
+      Active_Bound :     Positive;
+      Data         : in out Ada.Streams.Stream_Element_Array);
+   --  Encode one exec request into an exactly sized bounded Data array.
 
    procedure Encode_Result
      (Result       :     Result_Type;
@@ -138,6 +188,12 @@ package Spawn.Protocol is
       Active_Bound   : Positive)
       return Positive;
    --  Return the complete bounded frame length or raise Protocol_Error.
+
+   function Exec_Request_Frame_Length
+     (Request      : Exec_Request_Type;
+      Active_Bound : Positive)
+      return Positive;
+   --  Return the exact encoded exec-request frame length.
 
    function Result_Frame_Length
      (Result       : Result_Type;

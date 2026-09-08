@@ -27,6 +27,15 @@ package Spawn.Protocol.Tests is
 
    type Testcase is new Ahven.Framework.Test_Case with null record;
 
+   procedure Exec_Golden_Data;
+   --  Verify exact version 1 exec-request bytes and decoding.
+
+   procedure Exec_Rejects_Invalid_Data;
+   --  Verify malformed and semantically invalid exec requests are rejected.
+
+   procedure Exec_Roundtrip_And_Bounds;
+   --  Verify lossless exec-request fields and vector limits.
+
    procedure Header_Bounds;
    --  Verify fixed and active complete-frame bounds.
 

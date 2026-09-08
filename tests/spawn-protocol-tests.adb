@@ -33,6 +33,286 @@ package body Spawn.Protocol.Tests is
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
 
+   procedure Exec_Golden_Data
+   is
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 61)
+        := (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#02#,
+            16#00#, 16#00#, 16#00#, 16#31#,
+            16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#78#,
+            16#00#, 16#00#, 16#00#, 16#01#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#61#,
+            16#00#, 16#00#, 16#00#, 16#01#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#45#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#56#,
+            16#00#, 16#00#, 16#00#, 16#00#,
+            16#00#,
+            16#01#, 16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#65#,
+            16#ff#, 16#ff#, 16#ff#, 16#ff#,
+            16#ff#, 16#ff#, 16#ff#, 16#ff#);
+      Expected : Exec_Request_Type;
+      Data     : Ada.Streams.Stream_Element_Array (Golden'Range);
+      Decoded  : Exec_Request_Type;
+   begin
+      Expected.Executable := Ada.Strings.Unbounded.To_Unbounded_String ("/x");
+      Expected.Arguments.Append ("a");
+      Expected.Environment.Append
+        ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("E"),
+          Value => Ada.Strings.Unbounded.To_Unbounded_String ("V")));
+      Expected.Directory := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Expected.Standard_Output := (Mode => Null_Stream);
+      Expected.Standard_Error :=
+        (Mode => Truncate_File,
+         Path => Ada.Strings.Unbounded.To_Unbounded_String ("/e"));
+      Expected.Timeout := -1;
+
+      Assert
+        (Condition => Exec_Request_Frame_Length
+           (Request      => Expected,
+            Active_Bound => Maximum_Frame_Size) = Golden'Length,
+         Message   => "exec-request frame length differs");
+      Encode_Exec_Request
+        (Request      => Expected,
+         Active_Bound => Maximum_Frame_Size,
+         Data         => Data);
+      Assert (Condition => Data = Golden,
+              Message   => "exec-request golden bytes differ");
+
+      Decode_Exec_Request
+        (Data         => Golden,
+         Active_Bound => Maximum_Frame_Size,
+         Request      => Decoded);
+      Assert (Condition => Decoded = Expected,
+              Message   => "decoded exec request differs");
+   end Exec_Golden_Data;
+
+   -------------------------------------------------------------------------
+
+   procedure Exec_Rejects_Invalid_Data
+   is
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 61)
+        := (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#02#,
+            16#00#, 16#00#, 16#00#, 16#31#,
+            16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#78#,
+            16#00#, 16#00#, 16#00#, 16#01#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#61#,
+            16#00#, 16#00#, 16#00#, 16#01#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#45#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#56#,
+            16#00#, 16#00#, 16#00#, 16#00#,
+            16#00#,
+            16#01#, 16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#65#,
+            16#ff#, 16#ff#, 16#ff#, 16#ff#,
+            16#ff#, 16#ff#, 16#ff#, 16#ff#);
+      Request : Exec_Request_Type;
+
+      procedure Reject_Protocol
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String);
+      --  Assert that Data is rejected as structurally invalid.
+
+      procedure Reject_Request
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String);
+      --  Assert that Data is rejected as semantically invalid.
+
+      procedure Reject_Protocol
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String)
+      is
+      begin
+         begin
+            Decode_Exec_Request
+              (Data         => Data,
+               Active_Bound => Maximum_Frame_Size,
+               Request      => Request);
+            Fail (Message => Name & " accepted");
+         exception
+            when Protocol_Error => null;
+         end;
+      end Reject_Protocol;
+
+      procedure Reject_Request
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String)
+      is
+      begin
+         begin
+            Decode_Exec_Request
+              (Data         => Data,
+               Active_Bound => Maximum_Frame_Size,
+               Request      => Request);
+            Fail (Message => Name & " accepted");
+         exception
+            when Request_Error => null;
+         end;
+      end Reject_Request;
+   begin
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (8) := 1;
+         Reject_Protocol (Data => Data, Name => "wrong exec message kind");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (46) := 2;
+         Reject_Protocol (Data => Data, Name => "unknown stream mode");
+      end;
+      declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 22)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#02#,
+               16#00#, 16#00#, 16#00#, 16#0a#,
+               16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#78#,
+               16#00#, 16#00#, 16#04#, 16#01#);
+      begin
+         Reject_Request (Data => Data, Name => "oversized argument count");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (17) := Character'Pos ('x');
+         Reject_Request (Data => Data, Name => "relative executable");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (36) := Character'Pos ('=');
+         Reject_Request (Data => Data, Name => "invalid environment name");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (52) := Character'Pos ('e');
+         Reject_Request (Data => Data, Name => "relative stream path");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden (1 .. 60);
+      begin
+         Data (12) := 16#30#;
+         Reject_Protocol (Data => Data, Name => "truncated exec timeout");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array (1 .. 62) := (others => 0);
+      begin
+         Data (1 .. 61) := Golden;
+         Data (12) := 16#32#;
+         Reject_Protocol (Data => Data, Name => "trailing exec data");
+      end;
+   end Exec_Rejects_Invalid_Data;
+
+   -------------------------------------------------------------------------
+
+   procedure Exec_Roundtrip_And_Bounds
+   is
+      Request : Exec_Request_Type;
+      Decoded : Exec_Request_Type;
+   begin
+      Request.Executable := Ada.Strings.Unbounded.To_Unbounded_String
+        ("/usr/bin/printf");
+      Request.Arguments.Append ("");
+      Request.Arguments.Append
+        ("spaces" & ASCII.HT & "quotes '"" glob *" & ASCII.LF);
+      Request.Environment.Append
+        ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("A"),
+          Value => Ada.Strings.Unbounded.To_Unbounded_String
+            ("one" & ASCII.LF & "two")));
+      Request.Environment.Append
+        ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("A"),
+          Value => Ada.Strings.Unbounded.To_Unbounded_String ("replacement")));
+      Request.Directory := Ada.Strings.Unbounded.To_Unbounded_String
+        ("/tmp/work area");
+      Request.Standard_Output :=
+        (Mode => Truncate_File,
+         Path => Ada.Strings.Unbounded.To_Unbounded_String ("/tmp/out file"));
+      Request.Standard_Error := (Mode => Null_Stream);
+      Request.Timeout := Timeout_Milliseconds'Last;
+      declare
+         Length : constant Positive := Exec_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+      begin
+         Encode_Exec_Request
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size,
+            Data         => Data);
+         Decode_Exec_Request
+           (Data         => Data,
+            Active_Bound => Maximum_Frame_Size,
+            Request      => Decoded);
+         Assert (Condition => Decoded = Request,
+                 Message   => "exec request did not round trip");
+      end;
+
+      Request.Arguments.Clear;
+      Request.Environment.Clear;
+      Request.Executable := Ada.Strings.Unbounded.To_Unbounded_String ("/x");
+      Request.Directory := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Request.Standard_Output := (Mode => Null_Stream);
+      Request.Standard_Error := (Mode => Null_Stream);
+      Request.Timeout := 0;
+      for Index in 1 .. Maximum_Vector_Length loop
+         Request.Arguments.Append ("");
+         Request.Environment.Append
+           ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("E"),
+             Value => Ada.Strings.Unbounded.Null_Unbounded_String));
+      end loop;
+      declare
+         Length : constant Positive := Exec_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+      begin
+         Encode_Exec_Request
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size,
+            Data         => Data);
+         Decode_Exec_Request
+           (Data         => Data,
+            Active_Bound => Maximum_Frame_Size,
+            Request      => Decoded);
+         Assert (Condition => Decoded = Request,
+                 Message   => "maximum exec vectors did not round trip");
+      end;
+
+      Request.Arguments.Append ("");
+      declare
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Exec_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "oversized encoded argument vector accepted");
+      exception
+         when Request_Error => null;
+      end;
+
+      Request.Arguments.Delete_Last;
+      Request.Environment.Append
+        ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("E"),
+          Value => Ada.Strings.Unbounded.Null_Unbounded_String));
+      declare
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Exec_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "oversized encoded environment accepted");
+      exception
+         when Request_Error => null;
+      end;
+   end Exec_Roundtrip_And_Bounds;
+
+   -------------------------------------------------------------------------
+
    procedure Header_Bounds
    is
       Header : Header_Type;
@@ -164,6 +444,15 @@ package body Spawn.Protocol.Tests is
    is
    begin
       T.Set_Name (Name => "Spawn protocol tests");
+      T.Add_Test_Routine
+        (Routine => Exec_Golden_Data'Access,
+         Name    => "Encode and decode golden exec request");
+      T.Add_Test_Routine
+        (Routine => Exec_Roundtrip_And_Bounds'Access,
+         Name    => "Round trip bounded exec request");
+      T.Add_Test_Routine
+        (Routine => Exec_Rejects_Invalid_Data'Access,
+         Name    => "Reject invalid exec requests");
       T.Add_Test_Routine
         (Routine => Header_Golden_Data'Access,
          Name    => "Encode and decode golden header");

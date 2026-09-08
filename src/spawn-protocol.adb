@@ -27,6 +27,7 @@ package body Spawn.Protocol is
 
    use type Ada.Streams.Stream_Element_Array;
    use type Ada.Streams.Stream_Element_Offset;
+   use type Ada.Containers.Count_Type;
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_16;
    use type Interfaces.Unsigned_32;
@@ -53,6 +54,12 @@ package body Spawn.Protocol is
       Cursor : in out Ada.Streams.Stream_Element_Offset;
       Value  : out Ada.Strings.Unbounded.Unbounded_String);
    --  Decode one protocol-valid bounded diagnostic and advance Cursor.
+
+   procedure Decode_Stream
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Stream : out Stream_Specification_Type);
+   --  Decode one stream specification and advance Cursor.
 
    function Decode_I64
      (Data  : Ada.Streams.Stream_Element_Array;
@@ -89,6 +96,12 @@ package body Spawn.Protocol is
       Data   : in out Ada.Streams.Stream_Element_Array;
       Cursor : in out Ada.Streams.Stream_Element_Offset);
    --  Encode one validated result diagnostic and advance Cursor.
+
+   procedure Encode_Stream
+     (Stream :     Stream_Specification_Type;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset);
+   --  Encode one validated stream specification and advance Cursor.
 
    procedure Encode_I64
      (Value :     Interfaces.Integer_64;
@@ -128,6 +141,22 @@ package body Spawn.Protocol is
       return Positive;
    --  Return the encoded string length after validating its semantic bound.
 
+   function Stream_Field_Length (Stream : Stream_Specification_Type)
+      return Positive;
+   --  Return the encoded stream-specification length.
+
+   procedure Validate_Absolute_Path (Value : String; Name : String);
+   --  Reject an empty or non-absolute protocol path.
+
+   procedure Validate_Environment_Name
+     (Value : Ada.Strings.Unbounded.Unbounded_String);
+   --  Reject an empty environment name or one containing equals.
+
+   procedure Validate_Vector_Length
+     (Length : Ada.Containers.Count_Type;
+      Name   : String);
+   --  Reject a vector count beyond the version 1 bound.
+
    procedure Decode_Diagnostic
      (Data   :     Ada.Streams.Stream_Element_Array;
       Cursor : in out Ada.Streams.Stream_Element_Offset;
@@ -165,6 +194,135 @@ package body Spawn.Protocol is
          Value := Ada.Strings.Unbounded.To_Unbounded_String (Decoded);
       end;
    end Decode_Diagnostic;
+
+   -------------------------------------------------------------------------
+
+   procedure Decode_Exec_Request
+     (Data         :     Ada.Streams.Stream_Element_Array;
+      Active_Bound :     Positive;
+      Request      : out Exec_Request_Type)
+   is
+      Header  : Header_Type;
+      Cursor  : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+      Decoded : Exec_Request_Type;
+   begin
+      if Data'Length < Header_Size then
+         raise Protocol_Error with "exec frame shorter than header";
+      end if;
+      Decode_Header
+        (Data         => Data (Data'First .. Data'First + Header_Size - 1),
+         Active_Bound => Active_Bound,
+         Header       => Header);
+      if Header.Kind /= Exec_Request then
+         raise Protocol_Error with "exec request has wrong message kind";
+      end if;
+      if Frame_Length
+        (Payload_Length => Header.Payload_Length,
+         Active_Bound   => Active_Bound) /= Data'Length
+      then
+         raise Protocol_Error with "exec frame length mismatch";
+      end if;
+
+      Decode_String
+        (Data   => Data,
+         Cursor => Cursor,
+         Value  => Decoded.Executable);
+      Validate_Absolute_Path
+        (Value => Ada.Strings.Unbounded.To_String (Decoded.Executable),
+         Name  => "executable");
+
+      if Data'Last - Cursor + 1 < 4 then
+         raise Protocol_Error with "truncated argument count";
+      end if;
+      declare
+         Count : constant Interfaces.Unsigned_32
+           := Decode_U32 (Data => Data, First => Cursor);
+      begin
+         if Count > Maximum_Vector_Length then
+            raise Request_Error with "argument vector exceeds protocol bound";
+         end if;
+         Validate_Vector_Length
+           (Length => Ada.Containers.Count_Type (Count),
+            Name   => "argument");
+         Cursor := Cursor + 4;
+         for Index in 1 .. Natural (Count) loop
+            declare
+               Value : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Decode_String
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Value);
+               Decoded.Arguments.Append
+                 (Ada.Strings.Unbounded.To_String (Value));
+            end;
+         end loop;
+      end;
+
+      if Data'Last - Cursor + 1 < 4 then
+         raise Protocol_Error with "truncated environment count";
+      end if;
+      declare
+         Count : constant Interfaces.Unsigned_32
+           := Decode_U32 (Data => Data, First => Cursor);
+      begin
+         if Count > Maximum_Vector_Length then
+            raise Request_Error with
+              "environment vector exceeds protocol bound";
+         end if;
+         Validate_Vector_Length
+           (Length => Ada.Containers.Count_Type (Count),
+            Name   => "environment");
+         Cursor := Cursor + 4;
+         for Index in 1 .. Natural (Count) loop
+            declare
+               Environment_Item : Environment_Entry_Type;
+            begin
+               Decode_String
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Environment_Item.Name);
+               Validate_Environment_Name (Value => Environment_Item.Name);
+               Decode_String
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Environment_Item.Value);
+               Decoded.Environment.Append (Environment_Item);
+            end;
+         end loop;
+      end;
+
+      Decode_String
+        (Data   => Data,
+         Cursor => Cursor,
+         Value  => Decoded.Directory);
+      Decode_Stream
+        (Data   => Data,
+         Cursor => Cursor,
+         Stream => Decoded.Standard_Output);
+      Decode_Stream
+        (Data   => Data,
+         Cursor => Cursor,
+         Stream => Decoded.Standard_Error);
+      if Data'Last - Cursor + 1 < 8 then
+         raise Protocol_Error with "truncated exec timeout";
+      end if;
+      declare
+         Raw_Timeout : constant Interfaces.Integer_64
+           := Decode_I64 (Data => Data, First => Cursor);
+      begin
+         if Raw_Timeout < -1 then
+            raise Request_Error with "invalid exec timeout";
+         end if;
+         Decoded.Timeout := Timeout_Milliseconds (Raw_Timeout);
+      end;
+      Cursor := Cursor + 8;
+      if Cursor /= Data'Last + 1 then
+         raise Protocol_Error with "trailing exec payload bytes";
+      end if;
+      Request := Decoded;
+   end Decode_Exec_Request;
 
    -------------------------------------------------------------------------
 
@@ -386,6 +544,40 @@ package body Spawn.Protocol is
 
    -------------------------------------------------------------------------
 
+   procedure Decode_Stream
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Stream : out Stream_Specification_Type)
+   is
+   begin
+      if Data'Last - Cursor + 1 < 1 then
+         raise Protocol_Error with "stream mode is missing";
+      end if;
+      case Data (Cursor) is
+         when 0 =>
+            Stream := (Mode => Null_Stream);
+            Cursor := Cursor + 1;
+         when 1 =>
+            Cursor := Cursor + 1;
+            declare
+               Path : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Decode_String
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Path);
+               Validate_Absolute_Path
+                 (Value => Ada.Strings.Unbounded.To_String (Path),
+                  Name  => "stream");
+               Stream := (Mode => Truncate_File, Path => Path);
+            end;
+         when others =>
+            raise Protocol_Error with "unknown stream mode";
+      end case;
+   end Decode_Stream;
+
+   -------------------------------------------------------------------------
+
    procedure Decode_String
      (Data   :     Ada.Streams.Stream_Element_Array;
       Cursor : in out Ada.Streams.Stream_Element_Offset;
@@ -495,6 +687,79 @@ package body Spawn.Protocol is
          Cursor := Cursor + 1;
       end loop;
    end Encode_Diagnostic;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_Exec_Request
+     (Request      :     Exec_Request_Type;
+      Active_Bound :     Positive;
+      Data         : in out Ada.Streams.Stream_Element_Array)
+   is
+      Length : constant Positive := Exec_Request_Frame_Length
+        (Request      => Request,
+         Active_Bound => Active_Bound);
+      Cursor : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+   begin
+      if Data'Length /= Length then
+         raise Protocol_Error with "exec frame buffer length mismatch";
+      end if;
+      Encode_Header
+        (Header =>
+           (Kind           => Exec_Request,
+            Payload_Length => Interfaces.Unsigned_32 (Length - Header_Size)),
+         Data   => Data);
+      Encode_String
+        (Value  => Request.Executable,
+         Data   => Data,
+         Cursor => Cursor);
+
+      Encode_U32
+        (Value => Interfaces.Unsigned_32 (Request.Arguments.Length),
+         Data  => Data,
+         First => Cursor);
+      Cursor := Cursor + 4;
+      for Argument of Request.Arguments loop
+         Encode_String
+           (Value  => Ada.Strings.Unbounded.To_Unbounded_String (Argument),
+            Data   => Data,
+            Cursor => Cursor);
+      end loop;
+
+      Encode_U32
+        (Value => Interfaces.Unsigned_32 (Request.Environment.Length),
+         Data  => Data,
+         First => Cursor);
+      Cursor := Cursor + 4;
+      for Environment_Item of Request.Environment loop
+         Encode_String
+           (Value  => Environment_Item.Name,
+            Data   => Data,
+            Cursor => Cursor);
+         Encode_String
+           (Value  => Environment_Item.Value,
+            Data   => Data,
+            Cursor => Cursor);
+      end loop;
+
+      Encode_String
+        (Value  => Request.Directory,
+         Data   => Data,
+         Cursor => Cursor);
+      Encode_Stream
+        (Stream => Request.Standard_Output,
+         Data   => Data,
+         Cursor => Cursor);
+      Encode_Stream
+        (Stream => Request.Standard_Error,
+         Data   => Data,
+         Cursor => Cursor);
+      Encode_I64 (Value => Request.Timeout, Data => Data, First => Cursor);
+      Cursor := Cursor + 8;
+      if Cursor /= Data'Last + 1 then
+         raise Program_Error with "exec frame length calculation differs";
+      end if;
+   end Encode_Exec_Request;
 
    -------------------------------------------------------------------------
 
@@ -654,6 +919,27 @@ package body Spawn.Protocol is
 
    -------------------------------------------------------------------------
 
+   procedure Encode_Stream
+     (Stream :     Stream_Specification_Type;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset)
+   is
+      Ignored : constant Positive := Stream_Field_Length (Stream => Stream);
+      pragma Unreferenced (Ignored);
+   begin
+      Data (Cursor) := Ada.Streams.Stream_Element
+        (Stream_Mode'Pos (Stream.Mode));
+      Cursor := Cursor + 1;
+      if Stream.Mode = Truncate_File then
+         Encode_String
+           (Value  => Stream.Path,
+            Data   => Data,
+            Cursor => Cursor);
+      end if;
+   end Encode_Stream;
+
+   -------------------------------------------------------------------------
+
    procedure Encode_String
      (Value  :     Ada.Strings.Unbounded.Unbounded_String;
       Data   : in out Ada.Streams.Stream_Element_Array;
@@ -705,6 +991,51 @@ package body Spawn.Protocol is
               and 16#ff#);
       end loop;
    end Encode_U32;
+
+   -------------------------------------------------------------------------
+
+   function Exec_Request_Frame_Length
+     (Request      : Exec_Request_Type;
+      Active_Bound : Positive)
+      return Positive
+   is
+      Payload_Length : Natural := 8;
+   begin
+      Validate_Vector_Length
+        (Length => Request.Arguments.Length,
+         Name   => "argument");
+      Validate_Vector_Length
+        (Length => Request.Environment.Length,
+         Name   => "environment");
+
+      Payload_Length := Payload_Length
+        + String_Field_Length (Value => Request.Executable);
+      Validate_Absolute_Path
+        (Value => Ada.Strings.Unbounded.To_String (Request.Executable),
+         Name  => "executable");
+
+      Payload_Length := Payload_Length + 4;
+      for Argument of Request.Arguments loop
+         Payload_Length := Payload_Length + String_Field_Length
+           (Value => Ada.Strings.Unbounded.To_Unbounded_String (Argument));
+      end loop;
+
+      Payload_Length := Payload_Length + 4;
+      for Environment_Item of Request.Environment loop
+         Payload_Length := Payload_Length
+           + String_Field_Length (Value => Environment_Item.Name)
+           + String_Field_Length (Value => Environment_Item.Value);
+         Validate_Environment_Name (Value => Environment_Item.Name);
+      end loop;
+
+      Payload_Length := Payload_Length
+        + String_Field_Length (Value => Request.Directory)
+        + Stream_Field_Length (Stream => Request.Standard_Output)
+        + Stream_Field_Length (Stream => Request.Standard_Error);
+      return Frame_Length
+        (Payload_Length => Interfaces.Unsigned_32 (Payload_Length),
+         Active_Bound   => Active_Bound);
+   end Exec_Request_Frame_Length;
 
    -------------------------------------------------------------------------
 
@@ -802,6 +1133,28 @@ package body Spawn.Protocol is
 
    -------------------------------------------------------------------------
 
+   function Stream_Field_Length (Stream : Stream_Specification_Type)
+      return Positive
+   is
+   begin
+      case Stream.Mode is
+         when Null_Stream =>
+            return 1;
+         when Truncate_File =>
+            declare
+               Length : constant Positive := String_Field_Length
+                 (Value => Stream.Path);
+            begin
+               Validate_Absolute_Path
+                 (Value => Ada.Strings.Unbounded.To_String (Stream.Path),
+                  Name  => "stream");
+               return 1 + Length;
+            end;
+      end case;
+   end Stream_Field_Length;
+
+   -------------------------------------------------------------------------
+
    function String_Field_Length
      (Value : Ada.Strings.Unbounded.Unbounded_String)
       return Positive
@@ -821,6 +1174,16 @@ package body Spawn.Protocol is
 
    -------------------------------------------------------------------------
 
+   procedure Validate_Absolute_Path (Value : String; Name : String)
+   is
+   begin
+      if Value'Length = 0 or else Value (Value'First) /= '/' then
+         raise Request_Error with Name & " path must be absolute";
+      end if;
+   end Validate_Absolute_Path;
+
+   -------------------------------------------------------------------------
+
    procedure Validate_Active_Bound (Active_Bound : Positive)
    is
    begin
@@ -830,5 +1193,34 @@ package body Spawn.Protocol is
          raise Protocol_Error with "invalid active frame bound";
       end if;
    end Validate_Active_Bound;
+
+   -------------------------------------------------------------------------
+
+   procedure Validate_Environment_Name
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+   is
+      Name : constant String := Ada.Strings.Unbounded.To_String (Value);
+   begin
+      if Name'Length = 0 then
+         raise Request_Error with "environment name is empty";
+      end if;
+      for Item of Name loop
+         if Item = '=' then
+            raise Request_Error with "environment name contains equals";
+         end if;
+      end loop;
+   end Validate_Environment_Name;
+
+   -------------------------------------------------------------------------
+
+   procedure Validate_Vector_Length
+     (Length : Ada.Containers.Count_Type;
+      Name   : String)
+   is
+   begin
+      if Length > Maximum_Vector_Length then
+         raise Request_Error with Name & " vector exceeds protocol bound";
+      end if;
+   end Validate_Vector_Length;
 
 end Spawn.Protocol;
