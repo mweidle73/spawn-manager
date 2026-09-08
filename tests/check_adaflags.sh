@@ -33,6 +33,8 @@ copy_sources()
 		"$source_root/spawn_manager.gpr" \
 		"$destination"
 	cp "$source_root/tools/spawn_manager.adb" \
+		"$source_root/tools/spawn-signals.adb" \
+		"$source_root/tools/spawn-signals.ads" \
 		"$source_root/tools/spawn_manager_processes.adb" \
 		"$source_root/tools/spawn_manager_processes.ads" \
 		"$destination/tools"
