@@ -60,6 +60,15 @@ package body Spawn.Pool is
 
    protected Sockets
    is
+      procedure Abandon_Socket (C : Socket_Container);
+      --  Return one failed lease without making its manager reusable.
+
+      procedure Begin_Cleanup (Snapshot : out SOMP.Map);
+      --  Stop new leases and snapshot managers for out-of-lock cancellation.
+
+      procedure Finish_Cleanup;
+      --  Clear manager state after all out-of-lock cleanup has completed.
+
       procedure Insert_Socket (S : Socket_Container);
       --  Insert new socket into store.
 
@@ -69,18 +78,82 @@ package body Spawn.Pool is
       procedure Release_Socket (C : Socket_Container);
       --  Release given socket container.
 
-      procedure Cleanup;
-      --  Cleanup socket store.
+      entry Wait_For_No_Active;
+      --  Wait until every caller has returned or abandoned its lease.
    private
-      Data : SOMP.Map;
+      Active_Count  : Natural := 0;
+      Data          : SOMP.Map;
+      Shutting_Down : Boolean := False;
    end Sockets;
 
    -------------------------------------------------------------------------
 
    procedure Cleanup
    is
+      Snapshot : SOMP.Map;
+      Position : SOMP.Cursor;
    begin
-      Sockets.Cleanup;
+      Sockets.Begin_Cleanup (Snapshot => Snapshot);
+
+      --  Cancellation must happen before waiting for active leases: manager
+      --  signal handlers close their communication sockets and wake callers.
+
+      Position := Snapshot.First;
+      while SOMP.Has_Element (Position => Position) loop
+         declare
+            Manager : Socket_Container
+              := SOMP.Element (Position => Position);
+         begin
+            begin
+               GNAT.Expect.Interrupt (Descriptor => Manager.Pid);
+            exception
+               when E : others =>
+                  L (Msg => "Unable to interrupt manager "
+                     & To_String (Manager.Address) & ": "
+                     & Ada.Exceptions.Exception_Message (X => E));
+            end;
+         end;
+         SOMP.Next (Position => Position);
+      end loop;
+
+      Sockets.Wait_For_No_Active;
+
+      Position := Snapshot.First;
+      while SOMP.Has_Element (Position => Position) loop
+         declare
+            Manager : Socket_Container := SOMP.Element (Position => Position);
+            Match   : GNAT.Expect.Expect_Match := 0;
+         begin
+            begin
+               GNAT.Expect.Expect
+                 (Descriptor => Manager.Pid,
+                  Result     => Match,
+                  Regexp     => "",
+                  Timeout    => 3000);
+            exception
+               when GNAT.Expect.Process_Died =>
+                  L (Msg => "Manager " & To_String (Manager.Address)
+                     & " terminated");
+                  GNAT.Expect.Close (Descriptor => Manager.Pid);
+            end;
+
+            case Match is
+               when GNAT.Expect.Expect_Timeout =>
+                  L (Msg => "Timeout occured, KILL manager "
+                     & To_String (Manager.Address));
+                  GNAT.Expect.Close (Descriptor => Manager.Pid);
+               when others => null;
+            end case;
+
+            Manager.Socket.Close;
+            Remove_Socket_File
+              (Filename => To_String (Manager.Cleanup_Address));
+            Free (X => Manager.Socket);
+         end;
+         SOMP.Next (Position => Position);
+      end loop;
+
+      Sockets.Finish_Cleanup;
    end Cleanup;
 
    -------------------------------------------------------------------------
@@ -163,7 +236,14 @@ package body Spawn.Pool is
             Active_Bound => Positive (Cmd_Buffer_Size),
             Data         => Data);
          Sockets.Get_Socket (S);
-         Pid_Setup (S.Pid);
+         L (Msg => "Found available socket " & To_String (S.Address));
+         begin
+            Pid_Setup (S.Pid);
+         exception
+            when others =>
+               Sockets.Abandon_Socket (C => S);
+               raise;
+         end;
          begin
             return Send_Receive
               (Cont                  => S,
@@ -219,8 +299,15 @@ package body Spawn.Pool is
          Data         => Data);
 
       Sockets.Get_Socket (S);
+      L (Msg => "Found available socket " & To_String (S.Address));
 
-      Pid_Setup (S.Pid);
+      begin
+         Pid_Setup (S.Pid);
+      exception
+         when others =>
+            Sockets.Abandon_Socket (C => S);
+            raise;
+      end;
 
       begin
          Result := Send_Receive
@@ -434,7 +521,8 @@ package body Spawn.Pool is
       First_Byte_Timeout_MS : Protocol.Timeout_Milliseconds)
       return Protocol.Result_Type
    is
-      Result : Protocol.Result_Type;
+      Result       : Protocol.Result_Type;
+      Lease_Active : Boolean := True;
    begin
       L (Msg => "Sending request using socket " & To_String (Cont.Address));
 
@@ -454,10 +542,16 @@ package body Spawn.Pool is
             Result       => Result);
       end;
       Sockets.Release_Socket (C => Cont);
+      Lease_Active := False;
+      L (Msg => "Socket " & To_String (Cont.Address) & " released");
       return Result;
 
    exception
       when others =>
+         if Lease_Active then
+            Sockets.Abandon_Socket (C => Cont);
+            L (Msg => "Socket " & To_String (Cont.Address) & " abandoned");
+         end if;
          Log_A_File (Filename => To_String (Cont.Address & ".log"));
          raise;
    end Send_Receive;
@@ -468,55 +562,38 @@ package body Spawn.Pool is
    is
       -------------------------------------------------------------------------
 
-      procedure Cleanup
+      procedure Abandon_Socket (C : Socket_Container)
       is
-         E     : Socket_Container;
-         Pos   : SOMP.Cursor := Data.First;
-         Match : GNAT.Expect.Expect_Match := 0;
+         Position : constant SOMP.Cursor := Data.Find (Key => C.Address);
       begin
-         while SOMP.Has_Element (Position => Pos) loop
-            E := SOMP.Element (Position => Pos);
+         if not SOMP.Has_Element (Position => Position)
+           or else Active_Count = 0
+         then
+            raise Program_Error with "invalid abandoned manager lease";
+         end if;
+         Active_Count := Active_Count - 1;
+      end Abandon_Socket;
 
-            --  Send termination signal to manager, wait max. 3 seconds for it
-            --  to comply.
+      ----------------------------------------------------------------------
 
-            GNAT.Expect.Interrupt (Descriptor => E.Pid);
+      procedure Begin_Cleanup (Snapshot : out SOMP.Map)
+      is
+      begin
+         if Shutting_Down then
+            raise Pool_Error with "spawn manager cleanup already in progress";
+         end if;
+         Shutting_Down := True;
+         Snapshot := Data;
+      end Begin_Cleanup;
 
-            begin
-               GNAT.Expect.Expect
-                 (Descriptor => E.Pid,
-                  Result     => Match,
-                  Regexp     => "",
-                  Timeout    => 3000);
+      ----------------------------------------------------------------------
 
-            exception
-               when GNAT.Expect.Process_Died =>
-                  L (Msg => "Manager " & To_String (E.Address)
-                     & " terminated");
-                  GNAT.Expect.Close (Descriptor => E.Pid);
-            end;
-
-            case Match is
-               when GNAT.Expect.Expect_Timeout =>
-                  L (Msg => "Timeout occured, KILL manager" & " "
-                     & To_String (E.Address));
-                  GNAT.Expect.Close (Descriptor => E.Pid);
-               when others => null;
-            end case;
-
-            E.Socket.Close;
-            --  Keep the short transport address separate from the absolute
-            --  cleanup address captured during Init. The manager and caller
-            --  may both have changed their current directories by now. A
-            --  failed unlink must not prevent cleanup of the other managers.
-            Remove_Socket_File
-              (Filename => To_String (E.Cleanup_Address));
-            Free (X => E.Socket);
-            SOMP.Next (Position => Pos);
-         end loop;
-
+      procedure Finish_Cleanup
+      is
+      begin
          Data.Clear;
-      end Cleanup;
+         Shutting_Down := False;
+      end Finish_Cleanup;
 
       ----------------------------------------------------------------------
 
@@ -539,11 +616,15 @@ package body Spawn.Pool is
             Element.Available := False;
          end Set_Busy;
       begin
+         if Shutting_Down then
+            raise Pool_Error with "spawn manager pool is shutting down";
+         end if;
          while SOMP.Has_Element (Position => Pos) loop
             S := SOMP.Element (Position => Pos);
             if S.Available then
                Data.Update_Element (Position => Pos,
                                     Process  => Set_Busy'Access);
+               Active_Count := Active_Count + 1;
                Found := True;
                exit;
             end if;
@@ -554,8 +635,6 @@ package body Spawn.Pool is
             raise Pool_Error with
               "No free spawn manager available, increase the pool size";
          end if;
-
-         L (Msg => "Found available socket " & To_String (S.Address));
       end Get_Socket;
 
       -------------------------------------------------------------------------
@@ -563,6 +642,9 @@ package body Spawn.Pool is
       procedure Insert_Socket (S : Socket_Container)
       is
       begin
+         if Shutting_Down then
+            raise Pool_Error with "spawn manager pool is shutting down";
+         end if;
          Data.Insert (Key      => S.Address,
                       New_Item => S);
       end Insert_Socket;
@@ -587,11 +669,25 @@ package body Spawn.Pool is
 
          Pos : constant SOMP.Cursor := Data.Find (Key => C.Address);
       begin
-         Data.Update_Element (Position => Pos,
-                              Process  => Set_Available'Access);
-         L (Msg => "Socket " & To_String
-            (SOMP.Element (Position => Pos).Address) & " released");
+         if not SOMP.Has_Element (Position => Pos)
+           or else Active_Count = 0
+         then
+            raise Program_Error with "invalid released manager lease";
+         end if;
+         if not Shutting_Down then
+            Data.Update_Element (Position => Pos,
+                                 Process  => Set_Available'Access);
+         end if;
+         Active_Count := Active_Count - 1;
       end Release_Socket;
+
+      ----------------------------------------------------------------------
+
+      entry Wait_For_No_Active when Active_Count = 0
+      is
+      begin
+         null;
+      end Wait_For_No_Active;
    end Sockets;
 
 end Spawn.Pool;
