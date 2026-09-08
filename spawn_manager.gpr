@@ -2,6 +2,8 @@ with "spawn_common";
 
 project Spawn_Manager is
 
+   for Languages use ("Ada", "C");
+
    type Build_Type is ("prod", "debug");
    Build : Build_Type := external ("BUILD", "prod");
 
@@ -20,6 +22,7 @@ project Spawn_Manager is
 
    package Compiler is
       for Default_Switches ("ada") use Compiler_Switches;
+      for Default_Switches ("c") use Spawn_Common.C_Compiler_Switches;
    end Compiler;
 
    package Linker is

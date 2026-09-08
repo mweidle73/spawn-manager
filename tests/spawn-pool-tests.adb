@@ -746,6 +746,9 @@ package body Spawn.Pool.Tests is
         (Routine => Command_Timeout'Access,
          Name    => "Command timeout");
       T.Add_Test_Routine
+        (Routine => Timeout_Descendant_Group'Access,
+         Name    => "Timeout descendant process group");
+      T.Add_Test_Routine
         (Routine => Invalid_Socket_Directory'Access,
          Name    => "Invalid socket directory");
       T.Add_Test_Routine
@@ -1067,5 +1070,47 @@ package body Spawn.Pool.Tests is
    begin
       raise Test_Log_Exception;
    end Test_Log_Error;
+
+   -------------------------------------------------------------------------
+
+   procedure Timeout_Descendant_Group
+   is
+      use Ada.Directories;
+
+      Pid_File    : constant String := "obj/timeout-descendant.pid";
+      Initialized : Boolean := False;
+   begin
+      if Exists (Name => Pid_File) then
+         Delete_File (Name => Pid_File);
+      end if;
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Initialized := True;
+
+      begin
+         Spawn.Pool.Execute
+           (Command => "sleep 60 & echo $! > " & Pid_File & "; wait",
+            Timeout => 500);
+         Fail (Message => "Failure expected");
+      exception
+         when Spawn.Pool.Command_Failed => null;
+      end;
+
+      Spawn.Pool.Execute
+        (Command => "test -s " & Pid_File
+         & " && ! kill -0 $(cat " & Pid_File & ") 2>/dev/null");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+      Delete_File (Name => Pid_File);
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         if Exists (Name => Pid_File) then
+            Delete_File (Name => Pid_File);
+         end if;
+         raise;
+   end Timeout_Descendant_Group;
 
 end Spawn.Pool.Tests;

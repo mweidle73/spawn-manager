@@ -11,8 +11,6 @@ GIT_REV      := $(shell git describe --always 2> /dev/null)
 
 GPR_FILE = gnat/spawn.gpr
 
-CFLAGS = -W -Wall -Werror -O3
-
 BUILD_TYPE = prod
 
 all: spawn_lib spawn_manager
@@ -42,7 +40,7 @@ tests: spawn_tests spawn_manager
 	@$(OBJDIR)/test_runner
 	@tests/check_adaflags.sh "$(CURDIR)"
 
-spawn_manager: $(VERSION_SPEC) $(OBJDIR)/spawn_wrapper
+spawn_manager: $(VERSION_SPEC)
 	@gnatmake -P$@ -p -XBUILD=$(BUILD_TYPE)
 
 spawn_performance:
@@ -53,10 +51,6 @@ spawn_lib:
 
 perf: spawn_performance spawn_manager
 	@$(OBJDIR)/perf/performance
-
-$(OBJDIR)/spawn_wrapper: tools/spawn_wrapper.c
-	@mkdir -p $(OBJDIR)
-	$(CC) -static $(CFLAGS) -o $@ $<
 
 install: install_lib install_manager
 
@@ -70,8 +64,8 @@ install_lib: spawn_lib
 	install -m 644 $(GPR_FILE) $(PREFIX)/lib/gnat
 
 install_manager: spawn_manager
+	rm -f $(PREFIX)/spawn_wrapper
 	install -m 755 $(OBJDIR)/spawn_manager $(PREFIX)
-	install -m 755 $(OBJDIR)/spawn_wrapper $(PREFIX)
 
 cov: spawn_manager
 	@rm -f $(COVDIR)/*.gcda

@@ -37,6 +37,12 @@ package body Spawn.Signals is
 
    package L renames Spawn.Logger;
 
+   procedure Terminate_Current
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_posix_terminate_current";
+   --  Kill the active request group through the async-signal-safe C boundary.
+
    -------------------------------------------------------------------------
 
    protected body Exit_Handler_Type
@@ -50,21 +56,19 @@ package body Spawn.Signals is
          Socket_L.Close;
          Socket_C.Close;
          if Running then
-            pragma Debug (L.Log_File ("Child with pid"
-              & GNAT.Expect.Get_Pid (Descriptor => Current_Pd)'Img
-              & " still running, closing process descriptor"));
-            GNAT.Expect.Close (Descriptor => Current_Pd);
+            pragma Debug
+              (L.Log_File ("Active request still running, terminating group"));
+            Terminate_Current;
          end if;
          GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));
       end Handle_Signal;
 
       ----------------------------------------------------------------------
 
-      procedure Set_Running (Descriptor : GNAT.Expect.Process_Descriptor)
+      procedure Set_Running
       is
       begin
-         Running    := True;
-         Current_Pd := Descriptor;
+         Running := True;
       end Set_Running;
 
       ----------------------------------------------------------------------

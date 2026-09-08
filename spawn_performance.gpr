@@ -2,6 +2,8 @@ with "spawn_common";
 
 project Spawn_Performance is
 
+   for Languages use ("Ada", "C");
+
    for Source_Dirs use Spawn_Common.Source_Dirs & "perf";
    for Object_Dir use "obj/perf";
    for Main use ("performance");
@@ -10,6 +12,7 @@ project Spawn_Performance is
 
    package Compiler is
       for Default_Switches ("ada") use Compiler_Switches;
+      for Default_Switches ("c") use Spawn_Common.C_Compiler_Switches;
    end Compiler;
 
    package Binder is

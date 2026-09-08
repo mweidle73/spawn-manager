@@ -18,6 +18,21 @@ ____
 The Ada spawn manager uses UNIX domain sockets provided by the Anet library to
 implement fast and simple IPC.
 
+Process execution
+-----------------
+The existing public command-string API deliberately retains Bash semantics.
+The manager normalizes each request to an absolute `/bin/bash -o pipefail -c`
+launch and sends it through the same internal process representation intended
+for structured argument-vector requests. There is no intermediate
+`spawn_wrapper` process.
+
+A small C module is the only post-`fork` boundary. It performs child-only
+working-directory and descriptor setup, clears the signal mask, calls `execve`,
+reports pre-exec `errno`, waits for the exact status and owns timeout cleanup.
+Protocol handling, request construction, policy, diagnostics and pool state
+remain Ada. Comments in the C module document the operations which are safe
+between `fork` and `execve` and the ownership of every child cleanup path.
+
 Licence
 -------
 --------------------------------------------------------------------------------

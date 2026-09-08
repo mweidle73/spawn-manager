@@ -2,6 +2,8 @@ with "spawn_common";
 
 project Spawn_Lib is
 
+   for Languages use ("Ada", "C");
+
    for Source_Dirs use Spawn_Common.Source_Dirs;
    for Object_Dir use "obj/lib";
    for Library_Name use "spawn";
@@ -12,6 +14,7 @@ project Spawn_Lib is
 
    package Compiler is
       for Default_Switches ("ada") use Compiler_Switches;
+      for Default_Switches ("c") use Spawn_Common.C_Compiler_Switches;
    end Compiler;
 
 end Spawn_Lib;

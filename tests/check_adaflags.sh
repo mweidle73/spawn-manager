@@ -33,8 +33,12 @@ copy_sources()
 		"$source_root/spawn_manager.gpr" \
 		"$destination"
 	cp "$source_root/tools/spawn_manager.adb" \
-		"$source_root/tools/spawn_wrapper.c" \
+		"$source_root/tools/spawn_manager_processes.adb" \
+		"$source_root/tools/spawn_manager_processes.ads" \
 		"$destination/tools"
+	cp "$source_root/src/spawn-posix.c" \
+		"$source_root/src/spawn-posix.h" \
+		"$destination/src"
 	for source in "$source_root"/src/*.adb "$source_root"/src/*.ads; do
 		if test "$(basename "$source")" != spawn-version.ads; then
 			cp "$source" "$destination/src"

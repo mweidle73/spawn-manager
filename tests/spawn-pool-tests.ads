@@ -100,4 +100,7 @@ package Spawn.Pool.Tests is
    --  Verify behavior of retry logic if connection fails with connection
    --  refused error.
 
+   procedure Timeout_Descendant_Group;
+   --  Verify that timeout kills and reaps a command's in-group descendant.
+
 end Spawn.Pool.Tests;

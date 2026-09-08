@@ -99,23 +99,20 @@ begin
       Label   => "manager shell /bin/true");
 
    declare
-      Args    : GNAT.OS_Lib.Argument_List (1 .. 5);
-      Wrapper : constant String := Spawn.Utils.Locate_Exec_On_Path
-        (Name => "spawn_wrapper");
+      Args    : GNAT.OS_Lib.Argument_List (1 .. 4);
       Samples : Sample_Array (1 .. Loops);
       Start   : Ada.Real_Time.Time;
       Status  : Boolean;
    begin
-      Args (1) := new String'("/bin/bash");
-      Args (2) := new String'("-o");
-      Args (3) := new String'("pipefail");
-      Args (4) := new String'("-c");
-      Args (5) := new String'("true");
+      Args (1) := new String'("-o");
+      Args (2) := new String'("pipefail");
+      Args (3) := new String'("-c");
+      Args (4) := new String'("true");
 
       for Index in Samples'Range loop
          Start := Ada.Real_Time.Clock;
          GNAT.OS_Lib.Spawn
-           (Program_Name => Wrapper,
+           (Program_Name => "/bin/bash",
             Args         => Args,
             Success      => Status);
          Samples (Index) := Ada.Real_Time.To_Duration
@@ -128,7 +125,7 @@ begin
       for A in Args'Range loop
          GNAT.OS_Lib.Free (X => Args (A));
       end loop;
-      Report (Label => "direct GNAT wrapper/bash true", Samples => Samples);
+      Report (Label => "direct GNAT bash true", Samples => Samples);
    end;
 
    Spawn.Pool.Cleanup;
