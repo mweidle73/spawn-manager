@@ -48,6 +48,12 @@ package body Spawn.Protocol is
      (Source => Interfaces.Integer_64,
       Target => Interfaces.Unsigned_64);
 
+   procedure Decode_Diagnostic
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Value  : out Ada.Strings.Unbounded.Unbounded_String);
+   --  Decode one protocol-valid bounded diagnostic and advance Cursor.
+
    function Decode_I64
      (Data  : Ada.Streams.Stream_Element_Array;
       First : Ada.Streams.Stream_Element_Offset)
@@ -78,6 +84,12 @@ package body Spawn.Protocol is
       First :     Ada.Streams.Stream_Element_Offset);
    --  Encode one big-endian unsigned 16-bit field at First.
 
+   procedure Encode_Diagnostic
+     (Value  :     Ada.Strings.Unbounded.Unbounded_String;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset);
+   --  Encode one validated result diagnostic and advance Cursor.
+
    procedure Encode_I64
      (Value :     Interfaces.Integer_64;
       Data  : in out Ada.Streams.Stream_Element_Array;
@@ -106,10 +118,55 @@ package body Spawn.Protocol is
       return Interfaces.Unsigned_16;
    --  Return the assigned version 1 value for Kind.
 
+   function Diagnostic_Field_Length
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+      return Positive;
+   --  Return the encoded diagnostic length after validating its bound.
+
    function String_Field_Length
      (Value : Ada.Strings.Unbounded.Unbounded_String)
       return Positive;
    --  Return the encoded string length after validating its semantic bound.
+
+   procedure Decode_Diagnostic
+     (Data   :     Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset;
+      Value  : out Ada.Strings.Unbounded.Unbounded_String)
+   is
+      Length : Natural;
+   begin
+      if Data'Last - Cursor + 1 < 4 then
+         raise Protocol_Error with "truncated diagnostic length";
+      end if;
+      declare
+         Raw_Length : constant Interfaces.Unsigned_32
+           := Decode_U32 (Data => Data, First => Cursor);
+      begin
+         if Raw_Length > Maximum_Diagnostic_Size then
+            raise Protocol_Error with "diagnostic exceeds protocol bound";
+         end if;
+         Length := Natural (Raw_Length);
+      end;
+      Cursor := Cursor + 4;
+      if Data'Last - Cursor + 1 < Ada.Streams.Stream_Element_Offset (Length)
+      then
+         raise Protocol_Error with "truncated diagnostic data";
+      end if;
+      declare
+         Decoded : String (1 .. Length);
+      begin
+         for Index in Decoded'Range loop
+            Decoded (Index) := Character'Val (Data (Cursor));
+            if Decoded (Index) = ASCII.NUL then
+               raise Protocol_Error with "diagnostic contains NUL";
+            end if;
+            Cursor := Cursor + 1;
+         end loop;
+         Value := Ada.Strings.Unbounded.To_Unbounded_String (Decoded);
+      end;
+   end Decode_Diagnostic;
+
+   -------------------------------------------------------------------------
 
    procedure Decode_Header
      (Data         :     Ada.Streams.Stream_Element_Array;
@@ -159,6 +216,125 @@ package body Spawn.Protocol is
       end loop;
       return To_Integer_64 (Value);
    end Decode_I64;
+
+   -------------------------------------------------------------------------
+
+   procedure Decode_Result
+     (Data         :     Ada.Streams.Stream_Element_Array;
+      Active_Bound :     Positive;
+      Result       : out Result_Type)
+   is
+      Header : Header_Type;
+      Cursor : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+      Decoded_Kind : Result_Kind;
+   begin
+      if Data'Length < Header_Size then
+         raise Protocol_Error with "result frame shorter than header";
+      end if;
+      Decode_Header
+        (Data         => Data (Data'First .. Data'First + Header_Size - 1),
+         Active_Bound => Active_Bound,
+         Header       => Header);
+      if Header.Kind /= Result_Message then
+         raise Protocol_Error with "result has wrong message kind";
+      end if;
+      if Frame_Length
+        (Payload_Length => Header.Payload_Length,
+         Active_Bound   => Active_Bound) /= Data'Length
+      then
+         raise Protocol_Error with "result frame length mismatch";
+      end if;
+      if Data'Last - Cursor + 1 < 1 then
+         raise Protocol_Error with "result kind is missing";
+      end if;
+      if Natural (Data (Cursor)) > Result_Kind'Pos (Result_Kind'Last) then
+         raise Protocol_Error with "unknown result kind";
+      end if;
+      Decoded_Kind := Result_Kind'Val (Natural (Data (Cursor)));
+      Cursor := Cursor + 1;
+
+      case Decoded_Kind is
+         when Exited =>
+            if Data'Last - Cursor + 1 < 4 then
+               raise Protocol_Error with "truncated exit status";
+            end if;
+            Result :=
+              (Kind        => Exited,
+               Exit_Status => Decode_U32 (Data => Data, First => Cursor));
+            Cursor := Cursor + 4;
+         when Signaled =>
+            if Data'Last - Cursor + 1 < 2 then
+               raise Protocol_Error with "truncated signal number";
+            end if;
+            Result :=
+              (Kind          => Signaled,
+               Signal_Number => Decode_U16 (Data => Data, First => Cursor));
+            Cursor := Cursor + 2;
+         when Timed_Out =>
+            Result := (Kind => Timed_Out);
+         when Spawn_Failed =>
+            if Data'Last - Cursor + 1 < 6 then
+               raise Protocol_Error with "truncated spawn failure";
+            end if;
+            declare
+               Raw_Stage : constant Interfaces.Unsigned_16
+                 := Decode_U16 (Data => Data, First => Cursor);
+               Diagnostic : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               if Natural (Raw_Stage)
+                 > Failure_Stage'Pos (Failure_Stage'Last)
+               then
+                  raise Protocol_Error with "unknown failure stage";
+               end if;
+               Cursor := Cursor + 2;
+               declare
+                  Error_Number : constant Interfaces.Unsigned_32
+                    := Decode_U32 (Data => Data, First => Cursor);
+               begin
+                  Cursor := Cursor + 4;
+                  Decode_Diagnostic
+                    (Data   => Data,
+                     Cursor => Cursor,
+                     Value  => Diagnostic);
+                  Result :=
+                    (Kind    => Spawn_Failed,
+                     Failure =>
+                       (Stage => Failure_Stage'Val (Natural (Raw_Stage)),
+                        Error_Number => Error_Number,
+                        Diagnostic => Diagnostic));
+               end;
+            end;
+         when Request_Rejected =>
+            declare
+               Diagnostic : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Decode_Diagnostic
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Diagnostic);
+               Result :=
+                 (Kind       => Request_Rejected,
+                  Diagnostic => Diagnostic);
+            end;
+         when Protocol_Failed =>
+            declare
+               Diagnostic : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Decode_Diagnostic
+                 (Data   => Data,
+                  Cursor => Cursor,
+                  Value  => Diagnostic);
+               Result :=
+                 (Kind       => Protocol_Failed,
+                  Diagnostic => Diagnostic);
+            end;
+      end case;
+
+      if Cursor /= Data'Last + 1 then
+         raise Protocol_Error with "trailing result payload bytes";
+      end if;
+   end Decode_Result;
 
    -------------------------------------------------------------------------
 
@@ -281,6 +457,47 @@ package body Spawn.Protocol is
 
    -------------------------------------------------------------------------
 
+   function Diagnostic_Field_Length
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+      return Positive
+   is
+      Source : constant String := Ada.Strings.Unbounded.To_String (Value);
+   begin
+      if Source'Length > Maximum_Diagnostic_Size then
+         raise Protocol_Error with "diagnostic exceeds protocol bound";
+      end if;
+      for Item of Source loop
+         if Item = ASCII.NUL then
+            raise Protocol_Error with "diagnostic contains NUL";
+         end if;
+      end loop;
+      return 4 + Source'Length;
+   end Diagnostic_Field_Length;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_Diagnostic
+     (Value  :     Ada.Strings.Unbounded.Unbounded_String;
+      Data   : in out Ada.Streams.Stream_Element_Array;
+      Cursor : in out Ada.Streams.Stream_Element_Offset)
+   is
+      Source  : constant String := Ada.Strings.Unbounded.To_String (Value);
+      Ignored : constant Positive := Diagnostic_Field_Length (Value => Value);
+      pragma Unreferenced (Ignored);
+   begin
+      Encode_U32
+        (Value => Interfaces.Unsigned_32 (Source'Length),
+         Data  => Data,
+         First => Cursor);
+      Cursor := Cursor + 4;
+      for Item of Source loop
+         Data (Cursor) := Ada.Streams.Stream_Element (Character'Pos (Item));
+         Cursor := Cursor + 1;
+      end loop;
+   end Encode_Diagnostic;
+
+   -------------------------------------------------------------------------
+
    procedure Encode_Header
      (Header :     Header_Type;
       Data   : in out Ada.Streams.Stream_Element_Array)
@@ -331,6 +548,73 @@ package body Spawn.Protocol is
               and 16#ff#);
       end loop;
    end Encode_I64;
+
+   -------------------------------------------------------------------------
+
+   procedure Encode_Result
+     (Result       :     Result_Type;
+      Active_Bound :     Positive;
+      Data         : in out Ada.Streams.Stream_Element_Array)
+   is
+      Length : constant Positive := Result_Frame_Length
+        (Result       => Result,
+         Active_Bound => Active_Bound);
+      Cursor : Ada.Streams.Stream_Element_Offset
+        := Data'First + Header_Size;
+   begin
+      if Data'Length /= Length then
+         raise Protocol_Error with "result frame buffer length mismatch";
+      end if;
+      Encode_Header
+        (Header =>
+           (Kind           => Result_Message,
+            Payload_Length => Interfaces.Unsigned_32 (Length - Header_Size)),
+         Data   => Data);
+      Data (Cursor) := Ada.Streams.Stream_Element
+        (Result_Kind'Pos (Result.Kind));
+      Cursor := Cursor + 1;
+
+      case Result.Kind is
+         when Exited =>
+            Encode_U32
+              (Value => Result.Exit_Status,
+               Data  => Data,
+               First => Cursor);
+            Cursor := Cursor + 4;
+         when Signaled =>
+            Encode_U16
+              (Value => Result.Signal_Number,
+               Data  => Data,
+               First => Cursor);
+            Cursor := Cursor + 2;
+         when Timed_Out =>
+            null;
+         when Spawn_Failed =>
+            Encode_U16
+              (Value => Interfaces.Unsigned_16
+                 (Failure_Stage'Pos (Result.Failure.Stage)),
+               Data  => Data,
+               First => Cursor);
+            Cursor := Cursor + 2;
+            Encode_U32
+              (Value => Result.Failure.Error_Number,
+               Data  => Data,
+               First => Cursor);
+            Cursor := Cursor + 4;
+            Encode_Diagnostic
+              (Value  => Result.Failure.Diagnostic,
+               Data   => Data,
+               Cursor => Cursor);
+         when Request_Rejected | Protocol_Failed =>
+            Encode_Diagnostic
+              (Value  => Result.Diagnostic,
+               Data   => Data,
+               Cursor => Cursor);
+      end case;
+      if Cursor /= Data'Last + 1 then
+         raise Program_Error with "result frame length calculation differs";
+      end if;
+   end Encode_Result;
 
    -------------------------------------------------------------------------
 
@@ -469,6 +753,34 @@ package body Spawn.Protocol is
          when Result_Message => return 3;
       end case;
    end Kind_To_Wire;
+
+   -------------------------------------------------------------------------
+
+   function Result_Frame_Length
+     (Result       : Result_Type;
+      Active_Bound : Positive)
+      return Positive
+   is
+      Payload_Length : Natural := 1;
+   begin
+      case Result.Kind is
+         when Exited =>
+            Payload_Length := Payload_Length + 4;
+         when Signaled =>
+            Payload_Length := Payload_Length + 2;
+         when Timed_Out =>
+            null;
+         when Spawn_Failed =>
+            Payload_Length := Payload_Length + 6
+              + Diagnostic_Field_Length (Result.Failure.Diagnostic);
+         when Request_Rejected | Protocol_Failed =>
+            Payload_Length := Payload_Length
+              + Diagnostic_Field_Length (Result.Diagnostic);
+      end case;
+      return Frame_Length
+        (Payload_Length => Interfaces.Unsigned_32 (Payload_Length),
+         Active_Bound   => Active_Bound);
+   end Result_Frame_Length;
 
    -------------------------------------------------------------------------
 

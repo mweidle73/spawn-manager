@@ -174,6 +174,15 @@ package body Spawn.Protocol.Tests is
         (Routine => Header_Rejects_Invalid_Data'Access,
          Name    => "Reject invalid headers");
       T.Add_Test_Routine
+        (Routine => Result_Golden_Data'Access,
+         Name    => "Encode and decode golden result");
+      T.Add_Test_Routine
+        (Routine => Result_Roundtrip_Alternatives'Access,
+         Name    => "Round trip result alternatives");
+      T.Add_Test_Routine
+        (Routine => Result_Rejects_Invalid_Data'Access,
+         Name    => "Reject invalid results");
+      T.Add_Test_Routine
         (Routine => Shell_Golden_Data'Access,
          Name    => "Encode and decode golden shell request");
       T.Add_Test_Routine
@@ -183,6 +192,239 @@ package body Spawn.Protocol.Tests is
         (Routine => Shell_Rejects_Invalid_Data'Access,
          Name    => "Reject invalid shell requests");
    end Initialize;
+
+   -------------------------------------------------------------------------
+
+   procedure Result_Golden_Data
+   is
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 27)
+        := (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#0f#,
+            16#03#, 16#00#, 16#0f#,
+            16#00#, 16#00#, 16#00#, 16#02#,
+            16#00#, 16#00#, 16#00#, 16#04#,
+            16#65#, 16#78#, 16#65#, 16#63#);
+      Expected : constant Result_Type
+        := (Kind    => Spawn_Failed,
+            Failure =>
+              (Stage        => Exec_Target,
+               Error_Number => 2,
+               Diagnostic   => Ada.Strings.Unbounded.To_Unbounded_String
+                 ("exec")));
+      Data    : Ada.Streams.Stream_Element_Array (Golden'Range);
+      Decoded : Result_Type;
+   begin
+      Assert
+        (Condition => Result_Frame_Length
+           (Result       => Expected,
+            Active_Bound => Maximum_Frame_Size) = Golden'Length,
+         Message   => "result frame length differs");
+      Encode_Result
+        (Result       => Expected,
+         Active_Bound => Maximum_Frame_Size,
+         Data         => Data);
+      Assert (Condition => Data = Golden,
+              Message   => "result golden bytes differ");
+
+      Decode_Result
+        (Data         => Golden,
+         Active_Bound => Maximum_Frame_Size,
+         Result       => Decoded);
+      Assert (Condition => Decoded = Expected,
+              Message   => "decoded result differs");
+   end Result_Golden_Data;
+
+   -------------------------------------------------------------------------
+
+   procedure Result_Rejects_Invalid_Data
+   is
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 27)
+        := (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#0f#,
+            16#03#, 16#00#, 16#0f#,
+            16#00#, 16#00#, 16#00#, 16#02#,
+            16#00#, 16#00#, 16#00#, 16#04#,
+            16#65#, 16#78#, 16#65#, 16#63#);
+      Result : Result_Type;
+
+      procedure Reject
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String);
+      --  Assert that Data is rejected as an invalid result.
+
+      procedure Reject
+        (Data : Ada.Streams.Stream_Element_Array;
+         Name : String)
+      is
+      begin
+         begin
+            Decode_Result
+              (Data         => Data,
+               Active_Bound => Maximum_Frame_Size,
+               Result       => Result);
+            Fail (Message => Name & " accepted");
+         exception
+            when Protocol_Error => null;
+         end;
+      end Reject;
+   begin
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (8) := 1;
+         Reject (Data => Data, Name => "wrong result message kind");
+      end;
+      declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 13)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#03#,
+               16#00#, 16#00#, 16#00#, 16#01#,
+               16#06#);
+      begin
+         Reject (Data => Data, Name => "unknown result kind");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (15) := 16#12#;
+         Reject (Data => Data, Name => "unknown failure stage");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden (1 .. 26);
+      begin
+         Data (12) := 16#0e#;
+         Reject (Data => Data, Name => "truncated result diagnostic");
+      end;
+      declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 14)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#03#,
+               16#00#, 16#00#, 16#00#, 16#02#,
+               16#02#, 16#00#);
+      begin
+         Reject (Data => Data, Name => "trailing result data");
+      end;
+      declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 17)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#03#,
+               16#00#, 16#00#, 16#00#, 16#05#,
+               16#05#, 16#00#, 16#00#, 16#10#, 16#01#);
+      begin
+         Reject (Data => Data, Name => "oversized result diagnostic");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (24) := 0;
+         Reject (Data => Data, Name => "NUL result diagnostic");
+      end;
+   end Result_Rejects_Invalid_Data;
+
+   -------------------------------------------------------------------------
+
+   procedure Result_Roundtrip_Alternatives
+   is
+      procedure Check (Expected : Result_Type; Name : String);
+      --  Assert that Expected retains its discriminant and complete payload.
+
+      procedure Check (Expected : Result_Type; Name : String)
+      is
+         Length : constant Positive := Result_Frame_Length
+           (Result       => Expected,
+            Active_Bound => Maximum_Frame_Size);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         Decoded : Result_Type;
+      begin
+         Encode_Result
+           (Result       => Expected,
+            Active_Bound => Maximum_Frame_Size,
+            Data         => Data);
+         Decode_Result
+           (Data         => Data,
+            Active_Bound => Maximum_Frame_Size,
+            Result       => Decoded);
+         Assert (Condition => Decoded = Expected,
+                 Message   => Name & " did not round trip");
+      end Check;
+   begin
+      Check (Expected => (Kind => Exited, Exit_Status => 16#fedc_ba98#),
+             Name     => "exit result");
+      Check (Expected => (Kind => Signaled, Signal_Number => 15),
+             Name     => "signal result");
+      Check (Expected => (Kind => Timed_Out),
+             Name     => "timeout result");
+      Check
+        (Expected =>
+           (Kind    => Spawn_Failed,
+            Failure =>
+              (Stage        => Open_Stdout,
+               Error_Number => 13,
+               Diagnostic   => Ada.Strings.Unbounded.To_Unbounded_String
+                 ("permission denied"))),
+         Name => "spawn-failure result");
+      Check
+        (Expected =>
+           (Kind       => Request_Rejected,
+            Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+              ("bad request")),
+         Name => "request-rejection result");
+      Check
+        (Expected =>
+           (Kind       => Protocol_Failed,
+            Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+              ("bad frame")),
+         Name => "protocol-failure result");
+
+      declare
+         Maximum : constant String (1 .. Maximum_Diagnostic_Size)
+           := (others => 'd');
+      begin
+         Check
+           (Expected =>
+              (Kind       => Protocol_Failed,
+               Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+                 (Maximum)),
+            Name => "maximum diagnostic");
+      end;
+
+      declare
+         Too_Long : constant String (1 .. Maximum_Diagnostic_Size + 1)
+           := (others => 'd');
+         Invalid : constant Result_Type
+           := (Kind       => Protocol_Failed,
+               Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+                 (Too_Long));
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Result_Frame_Length
+           (Result       => Invalid,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "oversized encoded result diagnostic accepted");
+      exception
+         when Protocol_Error => null;
+      end;
+
+      declare
+         Invalid : constant Result_Type
+           := (Kind       => Request_Rejected,
+               Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+                 ("a" & ASCII.NUL & "b"));
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Result_Frame_Length
+           (Result       => Invalid,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "encoded result diagnostic with NUL accepted");
+      exception
+         when Protocol_Error => null;
+      end;
+   end Result_Roundtrip_Alternatives;
 
    -------------------------------------------------------------------------
 

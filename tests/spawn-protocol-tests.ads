@@ -39,6 +39,15 @@ package Spawn.Protocol.Tests is
    procedure Initialize (T : in out Testcase);
    --  Register protocol tests.
 
+   procedure Result_Golden_Data;
+   --  Verify exact version 1 spawn-failure result bytes and decoding.
+
+   procedure Result_Rejects_Invalid_Data;
+   --  Verify malformed and semantically invalid results are rejected.
+
+   procedure Result_Roundtrip_Alternatives;
+   --  Verify every result alternative and the diagnostic boundary.
+
    procedure Shell_Golden_Data;
    --  Verify exact version 1 shell-request bytes and decoding.
 
