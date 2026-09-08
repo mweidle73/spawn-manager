@@ -36,6 +36,31 @@ socket address as separate arguments rather than reparsing a command string.
 Each pool creates its socket endpoints below one randomized mode-`0700`
 directory and removes that directory during cleanup.
 
+Lifecycle boundaries
+--------------------
+Each request owns a new process group. Timeouts terminate and reap the group,
+and pool cleanup interrupts every manager before waiting for active leases.
+The version 1 API has no independent single-request cancellation operation;
+`Cleanup` cancels the complete pool.
+
+Normal leader exit also terminates and reaps any remaining member of the
+request group before its exit or signal result is returned. If that containment
+cannot complete, the request reports a supervision failure instead of success
+and poisons the pool. This prevents background descendants from crossing the
+lease boundary into a later request.
+
+`Pid_Setup` continues to receive the long-lived manager PID. A cgroup move
+therefore remains manager-wide and is inherited by its later children.
+A descendant which deliberately calls `setsid()` can leave the request process
+group; containing that case requires the separately selected cgroup policy and
+is not claimed by the process-group fallback.
+
+Frame writes and completion after the first byte have a fixed monotonic
+five-second deadline. For a finite child timeout, the first result byte is
+bounded by that timeout plus the transport allowance. An intentionally
+unlimited child also has an unlimited first-result-byte wait because version 1
+does not add a heartbeat protocol.
+
 A small C module is the only post-`fork` boundary. It performs child-only
 working-directory and descriptor setup, clears the signal mask, calls `execve`,
 reports pre-exec `errno`, waits for the exact status and owns timeout cleanup.
