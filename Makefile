@@ -56,8 +56,9 @@ spawn_performance:
 spawn_lib:
 	@gnatmake -P$@ -p
 
-perf: spawn_performance spawn_manager
+perf: $(POSIX_TEST) spawn_performance spawn_manager
 	@$(OBJDIR)/perf/performance
+	@$(POSIX_TEST) --benchmark
 
 install: install_lib install_manager
 
