@@ -54,10 +54,10 @@ extern char **environ;
 static volatile sig_atomic_t active_group;
 
 /*
- * The Ada manager opens its long-lived socket and debug log before the first
- * request and creates no persistent descriptors afterwards. Cache both
- * process-wide setup results; per-request pipes and pidfds reuse descriptors
- * below the first observed ceiling.
+ * The manager opens every persistent descriptor before its request loop.
+ * Cache that first complete ceiling for the close_range fallback; per-request
+ * descriptors are created only after fork. The normal close_range path still
+ * closes the complete live range independently of this value.
  */
 static int descriptor_ceiling = -1;
 static int subreaper_enabled;
@@ -520,11 +520,13 @@ int spawn_posix_execute(
 			SPAWN_POSIX_PROCESS_GROUP, saved_errno);
 		goto cleanup;
 	}
-	pidfd = open_pidfd(pid);
-	if (pidfd < 0 && errno != ENOSYS && errno != EINVAL) {
-		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
-			SPAWN_POSIX_WAIT, errno);
-		goto cleanup;
+	if (timeout_ms >= 0) {
+		pidfd = open_pidfd(pid);
+		if (pidfd < 0 && errno != ENOSYS && errno != EINVAL) {
+			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+				SPAWN_POSIX_WAIT, errno);
+			goto cleanup;
+		}
 	}
 	started = monotonic_milliseconds();
 	if (started < 0) {

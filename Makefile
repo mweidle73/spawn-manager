@@ -4,6 +4,7 @@ SRCDIR = src
 LIBDIR = lib
 OBJDIR = obj
 COVDIR = $(OBJDIR)/cov
+POSIX_TEST = $(OBJDIR)/spawn_posix_tests
 
 VERSION_SPEC := src/spawn-version.ads
 VERSION       = $(shell cat .version | sed 's/^v//')
@@ -32,10 +33,16 @@ $(VERSION_SPEC): .version
 	@echo "     \"$(VERSION)\";"                   >> $@
 	@echo "end Spawn.Version;"                     >> $@
 
+$(POSIX_TEST): tests/spawn-posix-tests.c src/spawn-posix.c src/spawn-posix.h
+	@mkdir -p $(OBJDIR)
+	$(CC) -std=c11 -W -Wall -Wextra -Werror -O2 -Isrc -o $@ \
+		tests/spawn-posix-tests.c src/spawn-posix.c
+
 spawn_tests:
 	@gnatmake -P$@ -p
 
-tests: spawn_tests spawn_manager
+tests: $(POSIX_TEST) spawn_tests spawn_manager
+	@$(POSIX_TEST)
 	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
 	@$(OBJDIR)/test_runner
 	@tests/check_adaflags.sh "$(CURDIR)"
