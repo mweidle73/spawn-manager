@@ -439,6 +439,33 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Duplicate_Init
+   is
+   begin
+      Test_Buffer := Null_Unbounded_String;
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Test_Log'Access);
+      begin
+         Spawn.Pool.Init
+           (Manager_Path => Manager_Path,
+            Buffer_Size  => Spawn.Protocol.Header_Size,
+            Log          => Test_Log_Error'Access);
+         Fail (Message => "duplicate pool initialization accepted");
+      exception
+         when Spawn.Pool.Pool_Error => null;
+      end;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Test_Buffer := Null_Unbounded_String;
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         Test_Buffer := Null_Unbounded_String;
+         raise;
+   end Duplicate_Init;
+
+   -------------------------------------------------------------------------
+
    procedure Execute_Bin_False
    is
    begin
@@ -846,6 +873,9 @@ package body Spawn.Pool.Tests is
    is
    begin
       T.Set_Name (Name => "Spawn pool tests");
+      T.Add_Test_Routine
+        (Routine => Duplicate_Init'Access,
+         Name    => "Reject duplicate pool initialization");
       T.Add_Test_Routine
         (Routine => Execute_Bin_True'Access,
          Name    => "Execute /bin/true");

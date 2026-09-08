@@ -414,7 +414,6 @@ package body Spawn.Pool is
    is
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
-      L := Log;
       if Manager_Path'Length = 0
         or else Manager_Path (Manager_Path'First) /= '/'
       then
@@ -425,7 +424,6 @@ package body Spawn.Pool is
       then
          raise Pool_Error with "invalid protocol buffer size";
       end if;
-      Cmd_Buffer_Size := Ada.Streams.Stream_Element_Offset (Buffer_Size);
 
       --  Check if socket directory exists
 
@@ -447,6 +445,8 @@ package body Spawn.Pool is
       begin
          Sockets.Start_Initialization
            (Pool_Directory => Cleanup_Directory);
+         L := Log;
+         Cmd_Buffer_Size := Ada.Streams.Stream_Element_Offset (Buffer_Size);
          begin
             Create_Private_Directory (Path => Pool_Address);
             for M in 1 .. Manager_Count loop

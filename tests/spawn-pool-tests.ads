@@ -84,6 +84,9 @@ package Spawn.Pool.Tests is
    procedure Command_Timeout;
    --  Test command timeout feature.
 
+   procedure Duplicate_Init;
+   --  Verify rejected reinitialization cannot mutate a live pool.
+
    procedure Invalid_Manager_Path;
    --  Verify the manager executable must be supplied as an absolute path.
 
