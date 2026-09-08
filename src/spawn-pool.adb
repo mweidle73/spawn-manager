@@ -57,6 +57,11 @@ package body Spawn.Pool is
    Addr_Base : constant String := "m-";
    Pool_Base : constant String := ".sp-";
 
+   function C_Chmod (Path : CS.chars_ptr; Mode : C.unsigned) return C.int
+     with Import,
+          Convention    => C,
+          External_Name => "chmod";
+
    function C_Mkdir (Path : CS.chars_ptr; Mode : C.unsigned) return C.int
      with Import,
           Convention    => C,
@@ -243,14 +248,21 @@ package body Spawn.Pool is
    procedure Create_Private_Directory (Path : String)
    is
       C_Path : CS.chars_ptr := CS.New_String (Path);
-      Result : C.int;
+      Error_Number : Integer := 0;
+      Result       : C.int;
    begin
       Result := C_Mkdir (Path => C_Path, Mode => 8#700#);
+      if Result = 0 then
+         Result := C_Chmod (Path => C_Path, Mode => 8#700#);
+      end if;
+      if Result /= 0 then
+         Error_Number := GNAT.OS_Lib.Errno;
+      end if;
       CS.Free (C_Path);
       if Result /= 0 then
          raise Pool_Error with "unable to create private socket directory '"
            & Path & "': " & GNAT.OS_Lib.Errno_Message
-             (Err => GNAT.OS_Lib.Errno);
+             (Err => Error_Number);
       end if;
    exception
       when others =>
