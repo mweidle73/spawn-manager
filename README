@@ -23,8 +23,16 @@ Process execution
 The existing public command-string API deliberately retains Bash semantics.
 The manager normalizes each request to an absolute `/bin/bash -o pipefail -c`
 launch and sends it through the same internal process representation intended
-for structured argument-vector requests. There is no intermediate
-`spawn_wrapper` process.
+for structured argument-vector requests. `Spawn.Pool.Execute` also accepts a
+structured request with an absolute executable, ordered arguments, a complete
+replacement environment, child working directory, independent output streams
+and timeout. It returns the exact exit, signal, timeout or spawn-failure result;
+`Execute_Checked` maps every nonzero result to the compatibility exception.
+There is no intermediate `spawn_wrapper` process.
+
+`Spawn.Pool.Init` requires the absolute path of the matching `spawn_manager`
+binary. The library never searches `PATH`, and it passes the buffer bound and
+socket address as separate arguments rather than reparsing a command string.
 
 A small C module is the only post-`fork` boundary. It performs child-only
 working-directory and descriptor setup, clears the signal mask, calls `execve`,

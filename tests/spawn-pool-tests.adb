@@ -64,6 +64,9 @@ package body Spawn.Pool.Tests is
           External_Name => "spawn_test_restore_signal_mask";
    --  Restore the signal mask saved by Block_Test_Signal.
 
+   Manager_Path : constant String
+     := Ada.Directories.Full_Name (Name => "obj/spawn_manager");
+
    task type Executor is
       entry Call;
       entry Done (Success : out Boolean);
@@ -128,8 +131,9 @@ package body Spawn.Pool.Tests is
    begin
       Create_Directory (New_Directory => Dir);
       Test_Buffer := Null_Unbounded_String;
-      Spawn.Pool.Init (Socket_Dir => Dir,
-                       Log        => Test_Log'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Socket_Dir   => Dir,
+                       Log          => Test_Log'Access);
       Initialized := True;
 
       declare
@@ -216,7 +220,8 @@ package body Spawn.Pool.Tests is
    begin
       Create_Directory (New_Directory => Dir);
       Test_Buffer := Null_Unbounded_String;
-      Spawn.Pool.Init (Manager_Count => 2,
+      Spawn.Pool.Init (Manager_Path  => Manager_Path,
+                       Manager_Count => 2,
                        Socket_Dir    => Dir,
                        Log           => Test_Log'Access);
       Initialized := True;
@@ -260,7 +265,8 @@ package body Spawn.Pool.Tests is
       Start : Time;
       Span  : Time_Span := To_Time_Span (D => 100.0);
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
 
       begin
          Start := Clock;
@@ -398,7 +404,8 @@ package body Spawn.Pool.Tests is
    procedure Execute_Bin_False
    is
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => "/bin/false");
       Spawn.Pool.Cleanup;
       Fail (Message => "Exception expected");
@@ -416,7 +423,8 @@ package body Spawn.Pool.Tests is
    procedure Execute_Bin_True
    is
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => "/bin/true");
       Spawn.Pool.Cleanup;
 
@@ -434,7 +442,8 @@ package body Spawn.Pool.Tests is
       Cmd  : constant String := "dd if=/dev/zero bs=1 count=1 of=" & File
         & " > /dev/null 2>&1";
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute (Command => Cmd);
       Spawn.Pool.Cleanup;
 
@@ -454,7 +463,8 @@ package body Spawn.Pool.Tests is
    procedure Execute_Nonexistent
    is
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
 
       begin
          Spawn.Pool.Execute (Command => "nonexistent/binary");
@@ -499,7 +509,8 @@ package body Spawn.Pool.Tests is
       end Executor;
 
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Executor.Start;
 
       delay 0.3;
@@ -550,7 +561,8 @@ package body Spawn.Pool.Tests is
          Original := To_Unbounded_String (ENV.Value (Name => Name));
       end if;
       ENV.Set (Name => Name, Value => "manager value");
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Initialized := True;
 
       --  Later caller mutation must not alter the already running manager.
@@ -577,7 +589,8 @@ package body Spawn.Pool.Tests is
    procedure Execute_Shell_Syntax
    is
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute
         (Command => "test ""$(printf '%s' 'a b')"" = 'a b'"
          & " && test $((2 + 3)) -eq 5");
@@ -611,7 +624,8 @@ package body Spawn.Pool.Tests is
          Message   => "unable to prepare inherited signal mask");
       Mask_Saved := True;
 
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute
         (Command => "grep -Eq '^SigBlk:[[:space:]]+0+$' "
          & "/proc/self/status");
@@ -638,7 +652,8 @@ package body Spawn.Pool.Tests is
       Request : Spawn.Protocol.Exec_Request_Type;
       Result  : Spawn.Protocol.Result_Type;
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Request.Executable := To_Unbounded_String ("/bin/true");
       Request.Directory := To_Unbounded_String ("/");
       Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
@@ -730,7 +745,8 @@ package body Spawn.Pool.Tests is
    begin
       Create_Path (New_Directory => First_Directory);
       Create_Path (New_Directory => Second_Directory);
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
 
       Assert_Directory (Expected => Full_Name (First_Directory));
 
@@ -812,6 +828,9 @@ package body Spawn.Pool.Tests is
         (Routine => Timeout_Descendant_Group'Access,
          Name    => "Timeout descendant process group");
       T.Add_Test_Routine
+        (Routine => Invalid_Manager_Path'Access,
+         Name    => "Reject relative manager path");
+      T.Add_Test_Routine
         (Routine => Invalid_Socket_Directory'Access,
          Name    => "Invalid socket directory");
       T.Add_Test_Routine
@@ -836,11 +855,23 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Invalid_Manager_Path
+   is
+   begin
+      Spawn.Pool.Init (Manager_Path => "spawn_manager");
+      Fail (Message => "relative manager path accepted");
+   exception
+      when Spawn.Pool.Pool_Error => null;
+   end Invalid_Manager_Path;
+
+   -------------------------------------------------------------------------
+
    procedure Invalid_Socket_Directory
    is
    begin
-      Spawn.Pool.Init (Socket_Dir => "/nonexistent/nonexistent",
-                       Log        => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Socket_Dir   => "/nonexistent/nonexistent",
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Fail (Message => "Exception expected");
 
    exception
@@ -856,8 +887,9 @@ package body Spawn.Pool.Tests is
       Ada.Directories.Create_Directory
         (New_Directory => Dir);
 
-      Spawn.Pool.Init (Socket_Dir => Dir,
-                       Log        => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Socket_Dir   => Dir,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Fail (Message => "Exception expected");
 
    exception
@@ -876,8 +908,9 @@ package body Spawn.Pool.Tests is
    begin
       Create_Directory (New_Directory => Dir);
 
-      Spawn.Pool.Init (Socket_Dir => Dir,
-                       Log        => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Socket_Dir   => Dir,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Delete_Directory (Directory => Dir);
       Fail (Message => "Exception expected");
 
@@ -937,7 +970,8 @@ package body Spawn.Pool.Tests is
       Task_Array : array (1 .. 4) of Executor;
       Result     : Boolean := True;
    begin
-      Spawn.Pool.Init (Manager_Count => 4,
+      Spawn.Pool.Init (Manager_Path  => Manager_Path,
+                       Manager_Count => 4,
                        Log           => Ada.Text_IO.Put_Line'Access);
       for T in Task_Array'Range loop
          Task_Array (T).Call;
@@ -991,7 +1025,8 @@ package body Spawn.Pool.Tests is
            (GNAT.Expect.Get_Pid (Descriptor => Descriptor));
       end Capture_Manager;
    begin
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Spawn.Pool.Execute
         (Command   => "printf '%s\n' ""$PPID"" > " & Output_Path,
          Pid_Setup => Capture_Manager'Access);
@@ -1033,7 +1068,8 @@ package body Spawn.Pool.Tests is
       Task_Array : array (1 .. 8) of Executor;
       Result     : Boolean := True;
    begin
-      Spawn.Pool.Init (Manager_Count => 4,
+      Spawn.Pool.Init (Manager_Path  => Manager_Path,
+                       Manager_Count => 4,
                        Log           => Ada.Text_IO.Put_Line'Access);
 
       for T in Task_Array'Range loop
@@ -1099,8 +1135,9 @@ package body Spawn.Pool.Tests is
            (Path => Full_Name (Name => Directory) & Address_Suffix),
          Message => "absolute socket fixture does not exceed the limit");
 
-      Spawn.Pool.Init (Socket_Dir => Directory,
-                       Log        => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Socket_Dir   => Directory,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Initialized := True;
       Spawn.Pool.Execute (Command => "/bin/true");
       Spawn.Pool.Cleanup;
@@ -1146,7 +1183,8 @@ package body Spawn.Pool.Tests is
       if Exists (Name => Pid_File) then
          Delete_File (Name => Pid_File);
       end if;
-      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
       Initialized := True;
 
       begin

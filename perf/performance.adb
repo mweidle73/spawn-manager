@@ -28,13 +28,13 @@
 --
 
 with Ada.Containers.Generic_Array_Sort;
+with Ada.Directories;
 with Ada.Real_Time;
 with Ada.Text_IO;
 
 with GNAT.OS_Lib;
 
 with Spawn.Pool;
-with Spawn.Utils;
 
 procedure Performance
 is
@@ -89,8 +89,8 @@ is
            (Samples (Samples'First + P95_Index - 1)));
    end Report;
 begin
-   Spawn.Utils.Expand_Search_Path (Cmd_Path => "obj/spawn_manager");
-   Spawn.Pool.Init;
+   Spawn.Pool.Init
+     (Manager_Path => Ada.Directories.Full_Name ("obj/spawn_manager"));
 
    Ada.Text_IO.Put_Line ("* Samples per arm:" & Loops'Image);
    Measure_Manager (Command => "true", Label => "manager shell builtin true");

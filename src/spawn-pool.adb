@@ -46,7 +46,6 @@ package body Spawn.Pool is
    use type Interfaces.Unsigned_32;
    use type Spawn.Protocol.Result_Kind;
 
-   Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
 
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
@@ -265,7 +264,8 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    procedure Init
-     (Manager_Count  : Positive      := 1;
+     (Manager_Path   : String;
+      Manager_Count  : Positive      := 1;
       Socket_Dir     : String        := "/tmp";
       Socket_Timeout : Duration      := 3.0;
       Buffer_Size    : Positive      := 8192;
@@ -274,6 +274,11 @@ package body Spawn.Pool is
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
       L := Log;
+      if Manager_Path'Length = 0
+        or else Manager_Path (Manager_Path'First) /= '/'
+      then
+         raise Pool_Error with "manager path must be absolute";
+      end if;
       if Buffer_Size < Protocol.Header_Size
         or else Buffer_Size > Protocol.Maximum_Frame_Size
       then
@@ -298,21 +303,23 @@ package body Spawn.Pool is
                raise Pool_Error with "UNIX path too long '" & Addr & "'";
             end if;
 
-            Args := GNAT.OS_Lib.Argument_String_To_List
-              (Arg_String => Mngr_Bin & Buffer_Size'Img & " " & Addr);
+            Args := new GNAT.OS_Lib.Argument_List'
+              (new String'(Buffer_Size'Img),
+               new String'(Addr));
 
             begin
                GNAT.Expect.Non_Blocking_Spawn
-                 (Descriptor  => Pid,
-                  Command     => Args (Args'First).all,
-                  Args        => Args (Args'First + 1 .. Args'Last),
+                  (Descriptor  => Pid,
+                  Command     => Manager_Path,
+                  Args        => Args.all,
                   Buffer_Size => 0);
                L (Msg => "Forked manager " & Addr);
 
             exception
                when GNAT.Expect.Invalid_Process =>
                   GNAT.OS_Lib.Free (Args);
-                  raise Command_Failed with "Unable to fork " & Mngr_Bin;
+                  raise Command_Failed with
+                    "Unable to fork manager " & Manager_Path;
             end;
 
             GNAT.OS_Lib.Free (Args);

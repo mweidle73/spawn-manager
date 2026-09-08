@@ -81,6 +81,9 @@ package Spawn.Pool.Tests is
    procedure Command_Timeout;
    --  Test command timeout feature.
 
+   procedure Invalid_Manager_Path;
+   --  Verify the manager executable must be supplied as an absolute path.
+
    procedure Invalid_Socket_Directory;
    --  Verify error behavior with invalid socket directory.
 
