@@ -29,17 +29,21 @@
 
 with Ada.Streams;
 with Ada.Strings.Unbounded;
+with Interfaces;
 
+with Anet.Sockets;
 with Anet.Sockets.Unix;
-with Anet.Streams;
 
-with Spawn.Types;
+with Spawn.Protocol;
+with Spawn.Transport;
 
 package body Spawn_Manager_Tests is
 
    use Ada.Strings.Unbounded;
    use Ahven;
-   use Spawn;
+   use type Interfaces.Integer_64;
+   use type Interfaces.Unsigned_32;
+   use type Spawn.Protocol.Result_Kind;
 
    -------------------------------------------------------------------------
 
@@ -56,67 +60,98 @@ package body Spawn_Manager_Tests is
 
    procedure Send_Receive
    is
-      use Ada.Streams;
+      Socket : Anet.Sockets.Unix.TCP_Socket_Type;
 
-      Stream   : aliased Anet.Streams.Memory_Stream_Type (Max_Elements => 32);
-      Socket   : Anet.Sockets.Unix.TCP_Socket_Type;
-      Invalid1 : constant Stream_Element_Array (1 .. 9) := (others => 16#ac#);
-      Invalid2 : constant Stream_Element_Array (1 .. 2) := (others => 234);
-      Req      : constant Types.Data_Type
-        := (Command => To_Unbounded_String ("/bin/true"),
-            others  => <>);
+      function Receive_Result return Spawn.Protocol.Result_Type;
+      --  Receive and decode one manager result.
+
+      function Receive_Result return Spawn.Protocol.Result_Type
+      is
+         Data : constant Ada.Streams.Stream_Element_Array
+           := Spawn.Transport.Receive_Frame
+             (Descriptor            => Socket.Get_Socket,
+              Active_Bound          => 8_192,
+              First_Byte_Timeout_MS => 1_000);
+         Result : Spawn.Protocol.Result_Type;
+      begin
+         Spawn.Protocol.Decode_Result
+           (Data         => Data,
+            Active_Bound => 8_192,
+            Result       => Result);
+         return Result;
+      end Receive_Result;
    begin
       Socket.Init;
 
       delay 0.3;
 
       Socket.Connect (Path => "obj/spawn_manager_0");
+      Socket.Set_Nonblocking_Mode;
 
-      Socket.Send (Item => Invalid1);
       declare
-         Data     : Stream_Element_Array (1 .. 128);
-         Last_Idx : Stream_Element_Offset;
-         Response : Types.Data_Type;
+         Request : constant Spawn.Protocol.Shell_Request_Type
+           := (Command   => To_Unbounded_String ("/bin/true"),
+               Directory => Null_Unbounded_String,
+               Timeout   => -1);
+         Length : constant Positive
+           := Spawn.Protocol.Shell_Request_Frame_Length
+             (Request      => Request,
+              Active_Bound => 8_192);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         Result : Spawn.Protocol.Result_Type;
       begin
-         Socket.Receive (Item => Data,
-                         Last => Last_Idx);
-
-         Stream.Set_Buffer (Buffer => Data (Data'First .. Last_Idx));
-         Types.Data_Type'Read (Stream'Access, Response);
-         Assert (Condition => not Response.Success,
-                 Message   => "Failure expected (1)");
+         Spawn.Protocol.Encode_Shell_Request
+           (Request      => Request,
+            Active_Bound => 8_192,
+            Data         => Data);
+         Data (Data'Last) := 16#fe#;
+         Spawn.Transport.Send_Frame
+           (Descriptor => Socket.Get_Socket,
+            Data       => Data);
+         Result := Receive_Result;
+         Assert (Condition => Result.Kind = Spawn.Protocol.Request_Rejected,
+                 Message   => "request rejection expected");
       end;
 
-      Socket.Send (Item => Invalid2);
       declare
-         Data     : Stream_Element_Array (1 .. 128);
-         Last_Idx : Stream_Element_Offset;
-         Response : Types.Data_Type;
+         Request : constant Spawn.Protocol.Shell_Request_Type
+           := (Command   => To_Unbounded_String ("/bin/true"),
+               Directory => Null_Unbounded_String,
+               Timeout   => -1);
+         Length : constant Positive
+           := Spawn.Protocol.Shell_Request_Frame_Length
+             (Request      => Request,
+              Active_Bound => 8_192);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         Result : Spawn.Protocol.Result_Type;
       begin
-         Socket.Receive (Item => Data,
-                         Last => Last_Idx);
-
-         Stream.Set_Buffer (Buffer => Data (Data'First .. Last_Idx));
-         Types.Data_Type'Read (Stream'Access, Response);
-         Assert (Condition => not Response.Success,
-                 Message   => "Failure expected (2)");
+         Spawn.Protocol.Encode_Shell_Request
+           (Request      => Request,
+            Active_Bound => 8_192,
+            Data         => Data);
+         Spawn.Transport.Send_Frame
+           (Descriptor => Socket.Get_Socket,
+            Data       => Data);
+         Result := Receive_Result;
+         Assert (Condition => Result.Kind = Spawn.Protocol.Exited,
+                 Message   => "exit result expected");
+         Assert (Condition => Result.Exit_Status = 0,
+                 Message   => "zero exit status expected");
       end;
 
-      Stream.Clear;
-      Types.Data_Type'Write (Stream'Access, Req);
-      Socket.Send (Item => Stream.Get_Buffer);
       declare
-         Data     : Stream_Element_Array (1 .. 128);
-         Last_Idx : Stream_Element_Offset;
-         Response : Types.Data_Type;
+         Invalid : constant Ada.Streams.Stream_Element_Array (1 .. 12)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#02#, 16#00#, 16#01#,
+               16#00#, 16#00#, 16#00#, 16#00#);
+         Result : Spawn.Protocol.Result_Type;
       begin
-         Socket.Receive (Item => Data,
-                         Last => Last_Idx);
-
-         Stream.Set_Buffer (Buffer => Data (Data'First .. Last_Idx));
-         Types.Data_Type'Read (Stream'Access, Response);
-         Assert (Condition => Response.Success,
-                 Message   => "Cmd not successful");
+         Socket.Send (Item => Invalid);
+         Result := Receive_Result;
+         Assert (Condition => Result.Kind = Spawn.Protocol.Protocol_Failed,
+                 Message   => "protocol failure expected");
       end;
 
       Socket.Close;

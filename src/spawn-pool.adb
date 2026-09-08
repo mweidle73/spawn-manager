@@ -31,16 +31,19 @@ with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
+with Interfaces;
 
 with GNAT.OS_Lib;
 
-with Anet.Streams;
 with Anet.OS;
 with Anet.Util;
 
-with Spawn.Types;
+with Spawn.Transport;
 
 package body Spawn.Pool is
+
+   use type Interfaces.Unsigned_32;
+   use type Spawn.Protocol.Result_Kind;
 
    Mngr_Bin  : constant String := "spawn_manager";
    Addr_Base : constant String := "spawn_manager-";
@@ -49,6 +52,9 @@ package body Spawn.Pool is
      (Key_Type     => Unbounded_String,
       Element_Type => Socket_Container);
    package SOMP renames Socket_Map_Package;
+
+   function Result_Timeout (Child_Timeout : Integer) return Integer;
+   --  Bound the first result byte after a finite child deadline.
 
    protected Sockets
    is
@@ -142,34 +148,46 @@ package body Spawn.Pool is
       Pid_Setup : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
    is
-      Stream  : aliased Anet.Streams.Memory_Stream_Type
-        (Max_Elements => Cmd_Buffer_Size);
-      Reply   : Types.Data_Type;
-      Request : constant Types.Data_Type
-        := (Timeout => Timeout,
-            Command => To_Unbounded_String (Command),
-            Dir     => To_Unbounded_String (Directory),
-            others  => <>);
-      S   : Socket_Container;
+      Request : constant Protocol.Shell_Request_Type
+        := (Command   => To_Unbounded_String (Command),
+            Directory => To_Unbounded_String (Directory),
+            Timeout   => Protocol.Timeout_Milliseconds (Timeout));
+      Length : constant Positive := Protocol.Shell_Request_Frame_Length
+        (Request      => Request,
+         Active_Bound => Positive (Cmd_Buffer_Size));
+      Data : Ada.Streams.Stream_Element_Array
+        (1 .. Ada.Streams.Stream_Element_Offset (Length));
+      S      : Socket_Container;
+      Result : Protocol.Result_Type;
    begin
       L (Msg => "Executing command '" & Command & "'");
 
-      Types.Data_Type'Write (Stream'Access, Request);
+      Protocol.Encode_Shell_Request
+        (Request      => Request,
+         Active_Bound => Positive (Cmd_Buffer_Size),
+         Data         => Data);
 
       Sockets.Get_Socket (S);
 
       Pid_Setup (S.Pid);
 
-      declare
-         Rcv_Data : constant Ada.Streams.Stream_Element_Array
-           := Send_Receive (Cont    => S,
-                            Request => Stream.Get_Buffer);
       begin
-         Stream.Set_Buffer (Buffer => Rcv_Data);
-         Types.Data_Type'Read (Stream'Access, Reply);
+         Result := Send_Receive
+           (Cont                  => S,
+            Request               => Data,
+            First_Byte_Timeout_MS =>
+              Result_Timeout (Child_Timeout => Timeout));
+      exception
+         when Spawn.Protocol.Protocol_Error
+            | Spawn.Transport.Extra_Data
+            | Spawn.Transport.Peer_Closed
+            | Spawn.Transport.Transport_Error
+            | Spawn.Transport.Transport_Timeout =>
+            raise Command_Failed with
+              "Manager transport failed for command: '" & Command & "'";
       end;
 
-      if not Reply.Success then
+      if Result.Kind /= Protocol.Exited or else Result.Exit_Status /= 0 then
          raise Command_Failed with "Command failed: '" & Command & "'";
       end if;
    end Execute;
@@ -186,6 +204,11 @@ package body Spawn.Pool is
       Args : GNAT.OS_Lib.Argument_List_Access;
    begin
       L := Log;
+      if Buffer_Size < Protocol.Header_Size
+        or else Buffer_Size > Protocol.Maximum_Frame_Size
+      then
+         raise Pool_Error with "invalid protocol buffer size";
+      end if;
       Cmd_Buffer_Size := Ada.Streams.Stream_Element_Offset (Buffer_Size);
 
       --  Check if socket directory exists
@@ -238,6 +261,7 @@ package body Spawn.Pool is
                  (Socket => Sock,
                   Path   => Anet.Sockets.Unix.Path_Type (Addr),
                   Count  => 5);
+               Sock.Set_Nonblocking_Mode;
                Sockets.Insert_Socket
                  (S => (Address         => To_Unbounded_String (Addr),
                         Cleanup_Address => To_Unbounded_String
@@ -304,35 +328,51 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   function Result_Timeout (Child_Timeout : Integer) return Integer
+   is
+   begin
+      if Child_Timeout < -1 then
+         raise Constraint_Error with "timeout must be -1 or nonnegative";
+      elsif Child_Timeout = -1 then
+         return -1;
+      elsif Child_Timeout
+        > Integer'Last - Spawn.Transport.Frame_Completion_Timeout_MS
+      then
+         return Integer'Last;
+      else
+         return Child_Timeout + Spawn.Transport.Frame_Completion_Timeout_MS;
+      end if;
+   end Result_Timeout;
+
+   -------------------------------------------------------------------------
+
    function Send_Receive
      (Cont    : Socket_Container;
-      Request : Ada.Streams.Stream_Element_Array)
-      return Ada.Streams.Stream_Element_Array
+      Request : Ada.Streams.Stream_Element_Array;
+      First_Byte_Timeout_MS : Integer)
+      return Protocol.Result_Type
    is
-      use type Ada.Streams.Stream_Element_Offset;
-
+      Result : Protocol.Result_Type;
    begin
       L (Msg => "Sending request using socket " & To_String (Cont.Address));
 
-      Cont.Socket.Send (Item => Request);
-
-      Receive_Reponse :
+      Spawn.Transport.Send_Frame
+        (Descriptor => Cont.Socket.Get_Socket,
+         Data       => Request);
       declare
-         Response : Ada.Streams.Stream_Element_Array (1 .. 32);
-         Last_Idx : Ada.Streams.Stream_Element_Offset;
+         Response : constant Ada.Streams.Stream_Element_Array
+           := Spawn.Transport.Receive_Frame
+             (Descriptor            => Cont.Socket.Get_Socket,
+              Active_Bound          => Positive (Cmd_Buffer_Size),
+              First_Byte_Timeout_MS => First_Byte_Timeout_MS);
       begin
-         Cont.Socket.Receive (Item => Response,
-                              Last => Last_Idx);
-         if Last_Idx = 0 then
-            L (Msg => "Zero response, connection closed by peer");
-            raise Command_Failed with "Zero response, connection closed by"
-              & " peer";
-         end if;
-
-         Sockets.Release_Socket (C => Cont);
-
-         return Response (Response'First .. Last_Idx);
-      end Receive_Reponse;
+         Spawn.Protocol.Decode_Result
+           (Data         => Response,
+            Active_Bound => Positive (Cmd_Buffer_Size),
+            Result       => Result);
+      end;
+      Sockets.Release_Socket (C => Cont);
+      return Result;
 
    exception
       when others =>

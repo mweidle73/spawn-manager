@@ -34,12 +34,13 @@ with Ada.Streams;
 with Ada.Exceptions;
 with Interfaces;
 
+with Anet.Sockets;
 with Anet.Sockets.Unix;
-with Anet.Streams;
 
-with Spawn.Types;
 with Spawn.Logger;
+with Spawn.Protocol;
 with Spawn.Signals;
+with Spawn.Transport;
 with Spawn.Version;
 
 with Spawn_Manager_Processes;
@@ -47,6 +48,7 @@ with Spawn_Manager_Processes;
 procedure Spawn_Manager
 is
    use Ada.Strings.Unbounded;
+   use type Ada.Streams.Stream_Element_Offset;
 
    package L renames Spawn.Logger;
 
@@ -60,6 +62,11 @@ is
    procedure Print_Usage;
    --  Print usage to stdout.
 
+   function To_Protocol_Result
+     (Result : Spawn_Manager_Processes.Execution_Result)
+      return Spawn.Protocol.Result_Type;
+   --  Translate the common execution result without losing termination data.
+
    -------------------------------------------------------------------------
 
    procedure Print_Usage
@@ -71,6 +78,40 @@ is
       Ada.Text_IO.Put_Line
         (Item => "Usage: " & Command_Name & " <buffer_size> <socket>");
    end Print_Usage;
+
+   -------------------------------------------------------------------------
+
+   function To_Protocol_Result
+     (Result : Spawn_Manager_Processes.Execution_Result)
+      return Spawn.Protocol.Result_Type
+   is
+   begin
+      case Result.Kind is
+         when Spawn_Manager_Processes.Exited =>
+            return
+              (Kind        => Spawn.Protocol.Exited,
+               Exit_Status => Interfaces.Unsigned_32 (Result.Exit_Status));
+         when Spawn_Manager_Processes.Signaled =>
+            return
+              (Kind          => Spawn.Protocol.Signaled,
+               Signal_Number => Interfaces.Unsigned_16
+                 (Result.Signal_Number));
+         when Spawn_Manager_Processes.Timed_Out =>
+            return (Kind => Spawn.Protocol.Timed_Out);
+         when Spawn_Manager_Processes.Spawn_Failed
+            | Spawn_Manager_Processes.Internal_Error =>
+            return
+              (Kind    => Spawn.Protocol.Spawn_Failed,
+               Failure =>
+                 (Stage => Spawn.Protocol.Failure_Stage'Val
+                    (Spawn_Manager_Processes.Failure_Stage'Pos
+                       (Result.Stage)),
+                  Error_Number => Interfaces.Unsigned_32
+                    (Result.Error_Number),
+                  Diagnostic => To_Unbounded_String
+                    (Spawn_Manager_Processes.Diagnostic (Result))));
+      end case;
+   end To_Protocol_Result;
 
    Buffer_Size : Positive;
    Socket_Path : Unbounded_String;
@@ -100,26 +141,44 @@ begin
    Sock_Listen.Init;
 
    declare
-      Stream : aliased Anet.Streams.Memory_Stream_Type
-        (Max_Elements => Ada.Streams.Stream_Element_Offset (Buffer_Size));
-      --  In-memory stream used for request/response serialization.
+      procedure Send_Reply (Result : Spawn.Protocol.Result_Type);
+      --  Send one exact structured result frame.
 
-      procedure Send_Reply (Success : Boolean);
-      --  Send reply message indicating success or failure.
+      procedure Send_Reply_Protocol_Failure (Diagnostic : String);
+      --  Attempt a terminal diagnostic without masking the original error.
 
       ----------------------------------------------------------------------
 
-      procedure Send_Reply (Success : Boolean)
+      procedure Send_Reply (Result : Spawn.Protocol.Result_Type)
       is
-         Reply : constant Spawn.Types.Data_Type
-           := (Success => Success,
-               others  => <>);
+         Length : constant Positive := Spawn.Protocol.Result_Frame_Length
+           (Result       => Result,
+            Active_Bound => Buffer_Size);
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
       begin
-         Stream.Clear;
-         Spawn.Types.Data_Type'Write (Stream'Access, Reply);
-         Sock_Comm.Send (Item => Stream.Get_Buffer);
-         pragma Debug (L.Log_File ("Reply sent [" & Success'Img & "]"));
+         Spawn.Protocol.Encode_Result
+           (Result       => Result,
+            Active_Bound => Buffer_Size,
+            Data         => Data);
+         Spawn.Transport.Send_Frame
+           (Descriptor => Sock_Comm.Get_Socket,
+            Data       => Data);
+         pragma Debug (L.Log_File ("Result sent [" & Result.Kind'Image & "]"));
       end Send_Reply;
+
+      ----------------------------------------------------------------------
+
+      procedure Send_Reply_Protocol_Failure (Diagnostic : String)
+      is
+      begin
+         Send_Reply
+           (Result =>
+              (Kind       => Spawn.Protocol.Protocol_Failed,
+               Diagnostic => To_Unbounded_String (Diagnostic)));
+      exception
+         when others => null;
+      end Send_Reply_Protocol_Failure;
 
       Signal_Handler : Spawn.Signals.Exit_Handler_Type
         (Socket_L => Sock_Listen'Access,
@@ -131,72 +190,106 @@ begin
       Sock_Listen.Listen;
 
       Sock_Listen.Accept_Connection (New_Socket => Sock_Comm);
+      Sock_Comm.Set_Nonblocking_Mode;
       pragma Debug (L.Log_File ("Connection established"));
 
       Main :
       loop
-         declare
-            use type Ada.Streams.Stream_Element_Offset;
-
-            Buffer   : Ada.Streams.Stream_Element_Array
-              (1 .. Ada.Streams.Stream_Element_Offset (Buffer_Size));
-            Last_Idx : Ada.Streams.Stream_Element_Offset;
-            Req      : Spawn.Types.Data_Type;
          begin
             pragma Debug (L.Log_File ("Waiting for data"));
-            Sock_Comm.Receive (Item => Buffer,
-                               Last => Last_Idx);
-
-            pragma Debug (L.Log_File ("Received" & Last_Idx'Img & " byte(s)"));
-            exit Main when Last_Idx = 0;
-
-            Stream.Set_Buffer (Buffer => Buffer (Buffer'First .. Last_Idx));
-            Spawn.Types.Data_Type'Read (Stream'Access, Req);
-            if Length (Req.Command) <= 1 then
-               raise Constraint_Error with "Invalid command of length"
-                 & Length (Req.Command)'Img & " received";
-            end if;
-
-            pragma Debug (L.Log_File ("Command request received:"));
-            pragma Debug (L.Log_File ("- CMD  [" & S (Req.Command) & "]"));
-            pragma Debug (L.Log_File ("- DIR  [" & S (Req.Dir) & "]"));
-
             declare
-               use type Spawn_Manager_Processes.Termination_Kind;
-
-               Request : constant
-                 Spawn_Manager_Processes.Execution_Request
-                 := Spawn_Manager_Processes.Create_Shell_Request
-                   (Command   => To_String (Req.Command),
-                    Directory => To_String (Req.Dir),
-                    Timeout   => Interfaces.Integer_64 (Req.Timeout));
-               Result : Spawn_Manager_Processes.Execution_Result;
+               Frame : constant Ada.Streams.Stream_Element_Array
+                 := Spawn.Transport.Receive_Frame
+                   (Descriptor   => Sock_Comm.Get_Socket,
+                    Active_Bound => Buffer_Size);
+               Header : Spawn.Protocol.Header_Type;
             begin
-               Signal_Handler.Set_Running;
-               begin
-                  Result := Spawn_Manager_Processes.Execute
-                    (Request => Request);
-               exception
-                  when others =>
-                     Signal_Handler.Stopped;
-                     raise;
-               end;
-               Signal_Handler.Stopped;
-               pragma Debug
-                 (L.Log_File
-                    ("Command result: "
-                     & Spawn_Manager_Processes.Diagnostic (Result)));
-               Send_Reply
-                 (Success => Result.Kind = Spawn_Manager_Processes.Exited
-                  and then Result.Exit_Status = 0);
+               pragma Debug (L.Log_File ("Received" & Frame'Length'Img
+                             & " byte(s)"));
+               Spawn.Protocol.Decode_Header
+                 (Data         => Frame
+                    (Frame'First .. Frame'First
+                     + Spawn.Protocol.Header_Size - 1),
+                  Active_Bound => Buffer_Size,
+                  Header       => Header);
+               case Header.Kind is
+                  when Spawn.Protocol.Shell_Request =>
+                     declare
+                        Wire_Request : Spawn.Protocol.Shell_Request_Type;
+                        Result : Spawn_Manager_Processes.Execution_Result;
+                     begin
+                        Spawn.Protocol.Decode_Shell_Request
+                          (Data         => Frame,
+                           Active_Bound => Buffer_Size,
+                           Request      => Wire_Request);
+                        pragma Debug
+                          (L.Log_File ("Shell request received:"));
+                        pragma Debug
+                          (L.Log_File ("- CMD  ["
+                           & S (Wire_Request.Command) & "]"));
+                        pragma Debug
+                          (L.Log_File ("- DIR  ["
+                           & S (Wire_Request.Directory) & "]"));
+                        Signal_Handler.Set_Running;
+                        begin
+                           Result := Spawn_Manager_Processes.Execute
+                             (Request =>
+                                Spawn_Manager_Processes.Create_Shell_Request
+                                  (Command   => S (Wire_Request.Command),
+                                   Directory => S (Wire_Request.Directory),
+                                   Timeout   => Wire_Request.Timeout));
+                        exception
+                           when others =>
+                              Signal_Handler.Stopped;
+                              raise;
+                        end;
+                        Signal_Handler.Stopped;
+                        pragma Debug
+                          (L.Log_File
+                             ("Command result: "
+                              & Spawn_Manager_Processes.Diagnostic (Result)));
+                        Send_Reply (Result => To_Protocol_Result (Result));
+                     end;
+                  when Spawn.Protocol.Exec_Request =>
+                     Send_Reply
+                       (Result =>
+                          (Kind       => Spawn.Protocol.Request_Rejected,
+                           Diagnostic => To_Unbounded_String
+                             ("structured exec is not enabled")));
+                  when Spawn.Protocol.Result_Message =>
+                     raise Spawn.Protocol.Protocol_Error with
+                       "request used result message kind";
+               end case;
             end;
 
          exception
-            when E : others =>
-               pragma Debug (L.Log_File ("Exception in main loop:"));
+            when E : Spawn.Protocol.Request_Error =>
+               pragma Debug (L.Log_File ("Request rejected:"));
                pragma Debug
                  (L.Log_File (Ada.Exceptions.Exception_Information (E)));
-               Send_Reply (Success => False);
+               Send_Reply
+                 (Result =>
+                    (Kind       => Spawn.Protocol.Request_Rejected,
+                     Diagnostic => To_Unbounded_String
+                       (Ada.Exceptions.Exception_Message (E))));
+            when Spawn.Transport.Peer_Closed =>
+               exit Main;
+            when E : Spawn.Protocol.Protocol_Error
+               | Spawn.Transport.Extra_Data
+               | Spawn.Transport.Transport_Timeout =>
+               pragma Debug (L.Log_File ("Protocol failure:"));
+               pragma Debug
+                 (L.Log_File (Ada.Exceptions.Exception_Information (E)));
+               Send_Reply_Protocol_Failure
+                 (Diagnostic => Ada.Exceptions.Exception_Message (E));
+               exit Main;
+            when E : others =>
+               pragma Debug (L.Log_File ("Internal manager failure:"));
+               pragma Debug
+                 (L.Log_File (Ada.Exceptions.Exception_Information (E)));
+               Send_Reply_Protocol_Failure
+                 (Diagnostic => "internal manager failure");
+               exit Main;
          end;
       end loop Main;
 

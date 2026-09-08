@@ -36,6 +36,8 @@ with Anet.Sockets.Unix;
 
 with GNAT.Expect;
 
+with Spawn.Protocol;
+
 package Spawn.Pool is
 
    use Ada.Strings.Unbounded;
@@ -95,10 +97,10 @@ private
 
    function Send_Receive
      (Cont    : Socket_Container;
-      Request : Ada.Streams.Stream_Element_Array)
-      return Ada.Streams.Stream_Element_Array;
-   --  Send given data as request to spawn manager. Return data of received
-   --  reply.
+      Request : Ada.Streams.Stream_Element_Array;
+      First_Byte_Timeout_MS : Integer)
+      return Spawn.Protocol.Result_Type;
+   --  Exchange one exact frame and release Cont only after a valid result.
 
    L : Log_Procedure := null;
    --  Log procedure.
