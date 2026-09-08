@@ -63,6 +63,9 @@ package Spawn.Pool.Tests is
    procedure Execute_Structured;
    --  Verify structured results, checked execution and timeout mapping.
 
+   procedure Execute_Structured_Environment;
+   --  Verify replacement environments remain isolated after all outcomes.
+
    procedure Execute_Working_Directories;
    --  Verify per-request directories and reuse after a rejected directory.
 

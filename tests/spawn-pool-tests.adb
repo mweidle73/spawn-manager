@@ -768,6 +768,112 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Execute_Structured_Environment
+   is
+      use Ada.Directories;
+
+      Output_Path : constant String := Current_Directory
+        & "/obj/structured-environment.out";
+
+      procedure Run_And_Check (Value : String);
+      --  Run env with only ONLY=Value and verify its complete visible state.
+
+      procedure Run_And_Check (Value : String)
+      is
+         Output  : Ada.Text_IO.File_Type;
+         Request : Spawn.Protocol.Exec_Request_Type;
+         Result  : Spawn.Protocol.Result_Type;
+      begin
+         if Exists (Name => Output_Path) then
+            Delete_File (Name => Output_Path);
+         end if;
+         Request.Executable := To_Unbounded_String ("/usr/bin/env");
+         Request.Environment.Append
+           ((Name  => To_Unbounded_String ("ONLY"),
+             Value => To_Unbounded_String (Value)));
+         Request.Directory := To_Unbounded_String (Current_Directory);
+         Request.Standard_Output :=
+           (Mode => Spawn.Protocol.Truncate_File,
+            Path => To_Unbounded_String (Output_Path));
+         Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+         Request.Timeout := 1_000;
+         Result := Spawn.Pool.Execute (Request => Request);
+         Assert
+           (Condition => Result.Kind = Spawn.Protocol.Exited
+              and then Result.Exit_Status = 0,
+            Message   => "environment request failed");
+         Ada.Text_IO.Open
+           (File => Output,
+            Mode => Ada.Text_IO.In_File,
+            Name => Output_Path,
+            Form => "shared=no");
+         Assert
+           (Condition => Ada.Text_IO.Get_Line (File => Output)
+              = "ONLY=" & Value,
+            Message   => "replacement environment differs");
+         Assert (Condition => Ada.Text_IO.End_Of_File (File => Output),
+                 Message   => "replacement environment leaked entries");
+         Ada.Text_IO.Close (File => Output);
+         Delete_File (Name => Output_Path);
+
+      exception
+         when others =>
+            if Ada.Text_IO.Is_Open (File => Output) then
+               Ada.Text_IO.Close (File => Output);
+            end if;
+            if Exists (Name => Output_Path) then
+               Delete_File (Name => Output_Path);
+            end if;
+            raise;
+      end Run_And_Check;
+   begin
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
+      Run_And_Check (Value => "first");
+
+      declare
+         Request : Spawn.Protocol.Exec_Request_Type;
+         Result  : Spawn.Protocol.Result_Type;
+      begin
+         Request.Executable := To_Unbounded_String ("/bin/false");
+         Request.Directory := To_Unbounded_String ("/");
+         Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
+         Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+         Request.Timeout := 1_000;
+         Result := Spawn.Pool.Execute (Request => Request);
+         Assert
+           (Condition => Result.Kind = Spawn.Protocol.Exited
+              and then Result.Exit_Status = 1,
+            Message   => "intermediate failure result differs");
+
+         Request.Executable := To_Unbounded_String
+           ("/definitely/missing/environment-target");
+         Result := Spawn.Pool.Execute (Request => Request);
+         Assert (Condition => Result.Kind = Spawn.Protocol.Spawn_Failed,
+                 Message   => "intermediate spawn failure differs");
+
+         Request.Executable := To_Unbounded_String ("/bin/sleep");
+         Request.Arguments.Append ("60");
+         Request.Timeout := 50;
+         Result := Spawn.Pool.Execute (Request => Request);
+         Assert (Condition => Result.Kind = Spawn.Protocol.Timed_Out,
+                 Message   => "intermediate timeout differs");
+      end;
+
+      Run_And_Check (Value => "second");
+      Spawn.Pool.Cleanup;
+
+   exception
+      when others =>
+         if Exists (Name => Output_Path) then
+            Delete_File (Name => Output_Path);
+         end if;
+         Spawn.Pool.Cleanup;
+         raise;
+   end Execute_Structured_Environment;
+
+   -------------------------------------------------------------------------
+
    procedure Execute_Working_Directories
    is
       use Ada.Directories;
@@ -903,6 +1009,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Execute_Structured'Access,
          Name    => "Execute structured requests");
+      T.Add_Test_Routine
+        (Routine => Execute_Structured_Environment'Access,
+         Name    => "Isolate structured environments");
       T.Add_Test_Routine
         (Routine => Execute_Working_Directories'Access,
          Name    => "Preserve per-request working directories");
