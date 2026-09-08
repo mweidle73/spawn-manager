@@ -32,6 +32,8 @@ with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
 with Interfaces;
+with Interfaces.C;
+with Interfaces.C.Strings;
 
 with GNAT.OS_Lib;
 
@@ -42,16 +44,34 @@ with Spawn.Transport;
 
 package body Spawn.Pool is
 
+   package C renames Interfaces.C;
+   package CS renames Interfaces.C.Strings;
+
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
+   use type C.int;
+   use type CS.chars_ptr;
+   use type GNAT.OS_Lib.Argument_List_Access;
    use type Spawn.Protocol.Result_Kind;
 
-   Addr_Base : constant String := "spawn_manager-";
+   Addr_Base : constant String := "m-";
+   Pool_Base : constant String := ".sp-";
+
+   function C_Mkdir (Path : CS.chars_ptr; Mode : C.unsigned) return C.int
+     with Import,
+          Convention    => C,
+          External_Name => "mkdir";
 
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,
       Element_Type => Socket_Container);
    package SOMP renames Socket_Map_Package;
+
+   procedure Create_Private_Directory (Path : String);
+   --  Atomically create Path with no group or other access.
+
+   procedure Remove_Pool_Directory (Path : String);
+   --  Remove an empty private socket directory without aborting cleanup.
 
    function Result_Timeout
      (Child_Timeout : Protocol.Timeout_Milliseconds)
@@ -63,7 +83,9 @@ package body Spawn.Pool is
       procedure Abandon_Socket (C : Socket_Container);
       --  Return one failed lease without making its manager reusable.
 
-      procedure Begin_Cleanup (Snapshot : out SOMP.Map);
+      procedure Begin_Cleanup
+        (Snapshot       : out SOMP.Map;
+         Pool_Directory : out Unbounded_String);
       --  Stop new leases and snapshot managers for out-of-lock cancellation.
 
       procedure Finish_Cleanup;
@@ -78,11 +100,15 @@ package body Spawn.Pool is
       procedure Release_Socket (C : Socket_Container);
       --  Release given socket container.
 
+      procedure Start_Initialization (Pool_Directory : String);
+      --  Record one new empty pool's private socket directory.
+
       entry Wait_For_No_Active;
       --  Wait until every caller has returned or abandoned its lease.
    private
       Active_Count  : Natural := 0;
       Data          : SOMP.Map;
+      Directory     : Unbounded_String;
       Shutting_Down : Boolean := False;
    end Sockets;
 
@@ -90,10 +116,13 @@ package body Spawn.Pool is
 
    procedure Cleanup
    is
-      Snapshot : SOMP.Map;
-      Position : SOMP.Cursor;
+      Snapshot       : SOMP.Map;
+      Position       : SOMP.Cursor;
+      Pool_Directory : Unbounded_String;
    begin
-      Sockets.Begin_Cleanup (Snapshot => Snapshot);
+      Sockets.Begin_Cleanup
+        (Snapshot       => Snapshot,
+         Pool_Directory => Pool_Directory);
 
       --  Cancellation must happen before waiting for active leases: manager
       --  signal handlers close their communication sockets and wake callers.
@@ -148,12 +177,15 @@ package body Spawn.Pool is
             Manager.Socket.Close;
             Remove_Socket_File
               (Filename => To_String (Manager.Cleanup_Address));
+            Anet.OS.Delete_File
+              (Filename => To_String (Manager.Cleanup_Address) & ".log");
             Free (X => Manager.Socket);
          end;
          SOMP.Next (Position => Position);
       end loop;
 
       Sockets.Finish_Cleanup;
+      Remove_Pool_Directory (Path => To_String (Pool_Directory));
    end Cleanup;
 
    -------------------------------------------------------------------------
@@ -205,6 +237,28 @@ package body Spawn.Pool is
       raise Connection_Refused with "Socket '" & String (Path) & "' still "
         & "refuses connection after" & Count'Img & " tries";
    end Connect_Retry_On_Refused;
+
+   -------------------------------------------------------------------------
+
+   procedure Create_Private_Directory (Path : String)
+   is
+      C_Path : CS.chars_ptr := CS.New_String (Path);
+      Result : C.int;
+   begin
+      Result := C_Mkdir (Path => C_Path, Mode => 8#700#);
+      CS.Free (C_Path);
+      if Result /= 0 then
+         raise Pool_Error with "unable to create private socket directory '"
+           & Path & "': " & GNAT.OS_Lib.Errno_Message
+             (Err => GNAT.OS_Lib.Errno);
+      end if;
+   exception
+      when others =>
+         if C_Path /= CS.Null_Ptr then
+            CS.Free (C_Path);
+         end if;
+         raise;
+   end Create_Private_Directory;
 
    -------------------------------------------------------------------------
 
@@ -380,69 +434,145 @@ package body Spawn.Pool is
            & "' does not exist";
       end if;
 
-      for M in 1 .. Manager_Count loop
-         declare
-            Pid  : GNAT.Expect.Process_Descriptor;
-            Addr : constant String := Socket_Dir & "/" & Addr_Base
-              & Anet.Util.Random_String (Len => 8);
+      declare
+         Pool_Name : constant String := Pool_Base
+           & Anet.Util.Random_String (Len => 12);
+         Pool_Address : constant String := Ada.Directories.Compose
+           (Containing_Directory => Socket_Dir,
+            Name                 => Pool_Name);
+         Cleanup_Directory : constant String := Ada.Directories.Compose
+           (Containing_Directory => Ada.Directories.Full_Name
+              (Name => Socket_Dir),
+            Name                 => Pool_Name);
+      begin
+         Sockets.Start_Initialization
+           (Pool_Directory => Cleanup_Directory);
          begin
-            if not Anet.Sockets.Unix.Is_Valid (Path => Addr) then
-               raise Pool_Error with "UNIX path too long '" & Addr & "'";
-            end if;
+            Create_Private_Directory (Path => Pool_Address);
+            for M in 1 .. Manager_Count loop
+               declare
+                  Pid                : GNAT.Expect.Process_Descriptor;
+                  Manager_Registered : Boolean := False;
+                  Manager_Started    : Boolean := False;
+                  Address_Suffix : constant String := Addr_Base
+                    & Anet.Util.Random_String (Len => 8);
+                  Addr : constant String := Ada.Directories.Compose
+                    (Containing_Directory => Pool_Address,
+                     Name                 => Address_Suffix);
+                  Cleanup_Addr : constant String := Ada.Directories.Compose
+                    (Containing_Directory => Cleanup_Directory,
+                     Name                 => Address_Suffix);
 
-            Args := new GNAT.OS_Lib.Argument_List'
-              (new String'(Buffer_Size'Img),
-               new String'(Addr));
+                  procedure Stop_Unregistered_Manager;
+                  --  Reap a manager which failed before insertion in Data.
 
-            begin
-               GNAT.Expect.Non_Blocking_Spawn
-                  (Descriptor  => Pid,
-                  Command     => Manager_Path,
-                  Args        => Args.all,
-                  Buffer_Size => 0);
-               L (Msg => "Forked manager " & Addr);
+                  procedure Stop_Unregistered_Manager
+                  is
+                     Match : GNAT.Expect.Expect_Match := 0;
+                  begin
+                     if not Manager_Started or else Manager_Registered then
+                        return;
+                     end if;
+                     begin
+                        GNAT.Expect.Interrupt (Descriptor => Pid);
+                     exception
+                        when others => null;
+                     end;
+                     begin
+                        GNAT.Expect.Expect
+                          (Descriptor => Pid,
+                           Result     => Match,
+                           Regexp     => "",
+                           Timeout    => 1000);
+                     exception
+                        when GNAT.Expect.Process_Died => null;
+                        when others                  => null;
+                     end;
+                     begin
+                        GNAT.Expect.Close (Descriptor => Pid);
+                     exception
+                        when others => null;
+                     end;
+                     Anet.OS.Delete_File (Filename => Cleanup_Addr);
+                     Anet.OS.Delete_File (Filename => Cleanup_Addr & ".log");
+                  end Stop_Unregistered_Manager;
+               begin
+                  if not Anet.Sockets.Unix.Is_Valid (Path => Addr) then
+                     raise Pool_Error with "UNIX path too long '" & Addr & "'";
+                  end if;
 
-            exception
-               when GNAT.Expect.Invalid_Process =>
+                  Args := new GNAT.OS_Lib.Argument_List'
+                    (new String'(Buffer_Size'Img),
+                     new String'(Addr));
+
+                  begin
+                     GNAT.Expect.Non_Blocking_Spawn
+                       (Descriptor  => Pid,
+                        Command     => Manager_Path,
+                        Args        => Args.all,
+                        Buffer_Size => 0);
+                     Manager_Started := True;
+                     L (Msg => "Forked manager " & Addr);
+                  exception
+                     when GNAT.Expect.Invalid_Process =>
+                        GNAT.OS_Lib.Free (Args);
+                        raise Command_Failed with
+                          "Unable to fork manager " & Manager_Path;
+                  end;
+
                   GNAT.OS_Lib.Free (Args);
-                  raise Command_Failed with
-                    "Unable to fork manager " & Manager_Path;
-            end;
 
-            GNAT.OS_Lib.Free (Args);
+                  L (Msg =>  "Waiting for socket '" & Addr
+                     & "' to become available");
+                  Anet.Util.Wait_For_File (Path     => Addr,
+                                           Timespan => Socket_Timeout);
 
-            L (Msg =>  "Waiting for socket '" & Addr
-               & "' to become available");
-            Anet.Util.Wait_For_File (Path     => Addr,
-                                     Timespan => Socket_Timeout);
-
-            declare
-               Sock : constant Socket_Handle
-                 := new Anet.Sockets.Unix.TCP_Socket_Type;
-            begin
-               Sock.Init;
-               Spawn.Transport.Set_Close_On_Exec
-                 (Descriptor => Sock.Get_Socket);
-               Connect_Retry_On_Refused
-                 (Socket => Sock,
-                  Path   => Anet.Sockets.Unix.Path_Type (Addr),
-                  Count  => 5);
-               Sock.Set_Nonblocking_Mode;
-               Sockets.Insert_Socket
-                 (S => (Address         => To_Unbounded_String (Addr),
-                        Cleanup_Address => To_Unbounded_String
-                          (Ada.Directories.Full_Name (Name => Addr)),
-                        Pid             => Pid,
-                        Socket          => Sock,
-                        Available       => True));
-               L (Msg => "Socket " & Addr & " ready");
-            exception
-               when others =>
-                  Log_A_File (Filename => Addr & ".log");
-                  raise;
-            end;
+                  declare
+                     Sock : Socket_Handle
+                       := new Anet.Sockets.Unix.TCP_Socket_Type;
+                  begin
+                     Sock.Init;
+                     Spawn.Transport.Set_Close_On_Exec
+                       (Descriptor => Sock.Get_Socket);
+                     Connect_Retry_On_Refused
+                       (Socket => Sock,
+                        Path   => Anet.Sockets.Unix.Path_Type (Addr),
+                        Count  => 5);
+                     Sock.Set_Nonblocking_Mode;
+                     Sockets.Insert_Socket
+                       (S =>
+                           (Address         => To_Unbounded_String (Addr),
+                           Cleanup_Address =>
+                             To_Unbounded_String (Cleanup_Addr),
+                           Pid             => Pid,
+                           Socket          => Sock,
+                           Available       => True));
+                     Manager_Registered := True;
+                     L (Msg => "Socket " & Addr & " ready");
+                  exception
+                     when others =>
+                        if not Manager_Registered then
+                           Sock.Close;
+                           Free (X => Sock);
+                           Log_A_File (Filename => Cleanup_Addr & ".log");
+                        end if;
+                        raise;
+                  end;
+               exception
+                  when others =>
+                     if Args /= null then
+                        GNAT.OS_Lib.Free (Args);
+                     end if;
+                     Stop_Unregistered_Manager;
+                     raise;
+               end;
+            end loop;
+         exception
+            when others =>
+               Cleanup;
+               raise;
          end;
-      end loop;
+      end;
    end Init;
 
    -------------------------------------------------------------------------
@@ -477,6 +607,20 @@ package body Spawn.Pool is
          L (Msg => "Error logging file contents '"
             & Filename & "': " & Ada.Exceptions.Exception_Message (X => E));
    end Log_A_File;
+
+   -------------------------------------------------------------------------
+
+   procedure Remove_Pool_Directory (Path : String)
+   is
+   begin
+      if Path'Length > 0 then
+         Ada.Directories.Delete_Directory (Directory => Path);
+      end if;
+   exception
+      when E : others =>
+         L (Msg => "Unable to remove private socket directory '" & Path
+            & "': " & Ada.Exceptions.Exception_Message (X => E));
+   end Remove_Pool_Directory;
 
    -------------------------------------------------------------------------
 
@@ -549,10 +693,20 @@ package body Spawn.Pool is
    exception
       when others =>
          if Lease_Active then
+            begin
+               Log_A_File (Filename => To_String (Cont.Address & ".log"));
+            exception
+               when others => null;
+            end;
+            begin
+               L (Msg => "Socket " & To_String (Cont.Address) & " abandoned");
+            exception
+               when others => null;
+            end;
             Sockets.Abandon_Socket (C => Cont);
-            L (Msg => "Socket " & To_String (Cont.Address) & " abandoned");
+         else
+            Log_A_File (Filename => To_String (Cont.Address & ".log"));
          end if;
-         Log_A_File (Filename => To_String (Cont.Address & ".log"));
          raise;
    end Send_Receive;
 
@@ -576,7 +730,9 @@ package body Spawn.Pool is
 
       ----------------------------------------------------------------------
 
-      procedure Begin_Cleanup (Snapshot : out SOMP.Map)
+      procedure Begin_Cleanup
+        (Snapshot       : out SOMP.Map;
+         Pool_Directory : out Unbounded_String)
       is
       begin
          if Shutting_Down then
@@ -584,6 +740,7 @@ package body Spawn.Pool is
          end if;
          Shutting_Down := True;
          Snapshot := Data;
+         Pool_Directory := Directory;
       end Begin_Cleanup;
 
       ----------------------------------------------------------------------
@@ -592,6 +749,7 @@ package body Spawn.Pool is
       is
       begin
          Data.Clear;
+         Directory := Null_Unbounded_String;
          Shutting_Down := False;
       end Finish_Cleanup;
 
@@ -680,6 +838,17 @@ package body Spawn.Pool is
          end if;
          Active_Count := Active_Count - 1;
       end Release_Socket;
+
+      ----------------------------------------------------------------------
+
+      procedure Start_Initialization (Pool_Directory : String)
+      is
+      begin
+         if Shutting_Down or else not Data.Is_Empty then
+            raise Pool_Error with "spawn manager pool is already initialized";
+         end if;
+         Directory := To_Unbounded_String (Pool_Directory);
+      end Start_Initialization;
 
       ----------------------------------------------------------------------
 

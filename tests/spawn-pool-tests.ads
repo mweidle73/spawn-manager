@@ -66,6 +66,9 @@ package Spawn.Pool.Tests is
    procedure Execute_Working_Directories;
    --  Verify per-request directories and reuse after a rejected directory.
 
+   procedure Failed_Init_Cleanup;
+   --  Verify an unregistered manager and its private directory are cleaned.
+
    procedure Parallel_Execution;
    --  Verify parallel command execution.
 

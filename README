@@ -33,6 +33,8 @@ There is no intermediate `spawn_wrapper` process.
 `Spawn.Pool.Init` requires the absolute path of the matching `spawn_manager`
 binary. The library never searches `PATH`, and it passes the buffer bound and
 socket address as separate arguments rather than reparsing a command string.
+Each pool creates its socket endpoints below one randomized mode-`0700`
+directory and removes that directory during cleanup.
 
 A small C module is the only post-`fork` boundary. It performs child-only
 working-directory and descriptor setup, clears the signal mask, calls `execve`,

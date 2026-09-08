@@ -54,16 +54,18 @@ package Spawn.Pool is
       Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access);
    --  Init the pool with the manager at the explicit absolute Manager_Path.
-   --  The Socket_Dir argument specifies the directory used to store manager
-   --  communication sockets and the optional log procedure will be used to
-   --  log additional runtime information. The optional socket timeout
+   --  Socket_Dir is the parent of one randomized mode-0700 directory owned by
+   --  this pool. That private directory stores all manager communication
+   --  sockets. The optional log procedure is used for additional runtime
+   --  information. The optional socket timeout
    --  argument defines the duration to wait for the appearance of each
    --  (1 .. Manager_Count) communication socket. A timeout raises an
    --  exception.
    --  The Buffer_Size argument specifies the size of the command buffer used
-   --  in the spawned managers to receive commands. Relative socket addresses
-   --  are resolved during Init so Cleanup remains independent of later
-   --  changes to the caller's current directory.
+   --  in the spawned managers to receive commands. A relative Socket_Dir
+   --  remains relative for the bounded transport address. Init separately
+   --  captures its absolute cleanup path so later caller-directory changes do
+   --  not affect removal.
 
    procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
 

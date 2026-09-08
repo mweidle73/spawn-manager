@@ -37,6 +37,7 @@ with Ada.Strings.Unbounded;
 
 with Interfaces;
 with Interfaces.C;
+with Interfaces.C.Strings;
 
 with Anet.OS;
 with Anet.Util;
@@ -45,10 +46,14 @@ with GNAT.Expect;
 
 package body Spawn.Pool.Tests is
 
+   package C renames Interfaces.C;
+   package CS renames Interfaces.C.Strings;
+
    use Ahven;
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
-   use type Interfaces.C.int;
+   use type C.int;
+   use type CS.chars_ptr;
    use type Spawn.Protocol.Failure_Stage;
    use type Spawn.Protocol.Result_Kind;
 
@@ -66,6 +71,11 @@ package body Spawn.Pool.Tests is
 
    Manager_Path : constant String
      := Ada.Directories.Full_Name (Name => "obj/spawn_manager");
+
+   function C_Directory_Mode (Path : CS.chars_ptr) return C.int
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_directory_mode";
 
    task type Executor is
       entry Call;
@@ -115,6 +125,7 @@ package body Spawn.Pool.Tests is
       Dir               : constant String := "obj/relative-socket-"
         & Anet.Util.Random_String (Len => 8);
       Log_Prefix        : constant String := "Forked manager ";
+      Pool_Directory    : Unbounded_String;
       Socket_Path       : Unbounded_String;
       Original_Dir      : constant String := Current_Directory;
       Initialized       : Boolean := False;
@@ -156,6 +167,31 @@ package body Spawn.Pool.Tests is
                  Message   => "Manager socket address not terminated");
          Socket_Path := To_Unbounded_String
            (Log_Data (Address_First .. Newline - 1));
+         Assert
+           (Condition => Element (Source => Socket_Path, Index => 1) /= '/',
+            Message   => "Relative manager socket became absolute");
+         Assert
+           (Condition => Ada.Strings.Fixed.Index
+              (Source  => To_String (Socket_Path),
+               Pattern => Dir & "/.sp-") = 1,
+            Message   => "Relative manager socket lost its short spelling");
+         Pool_Directory := To_Unbounded_String
+           (Containing_Directory (Name => To_String (Socket_Path)));
+         declare
+            Path : CS.chars_ptr := CS.New_String (To_String (Pool_Directory));
+            Mode : C.int;
+         begin
+            Mode := C_Directory_Mode (Path => Path);
+            CS.Free (Path);
+            Assert (Condition => Mode = 8#700#,
+                    Message   => "Pool socket directory is not mode 0700");
+         exception
+            when others =>
+               if Path /= CS.Null_Ptr then
+                  CS.Free (Path);
+               end if;
+               raise;
+         end;
       end;
 
       --  The manager changes its cwd for the command. The parent then changes
@@ -179,6 +215,8 @@ package body Spawn.Pool.Tests is
       exception
          when Anet.OS.IO_Error => null;
       end;
+      Assert (Condition => not Exists (Name => To_String (Pool_Directory)),
+              Message   => "Private pool socket directory was not removed");
       Test_Buffer := Null_Unbounded_String;
       Remove_Test_Directory;
 
@@ -775,6 +813,35 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Failed_Init_Cleanup
+   is
+      use Ada.Directories;
+
+      Directory : constant String := "obj/init-failure-"
+        & Anet.Util.Random_String (Len => 8);
+   begin
+      Create_Directory (New_Directory => Directory);
+      begin
+         Spawn.Pool.Init
+           (Manager_Path   => "/bin/true",
+            Socket_Dir     => Directory,
+            Socket_Timeout => 0.050,
+            Log            => Ada.Text_IO.Put_Line'Access);
+         Fail (Message => "short-lived manager unexpectedly initialized");
+      exception
+         when Anet.Util.Wait_Timeout => null;
+      end;
+      Delete_Directory (Directory => Directory);
+   exception
+      when others =>
+         if Exists (Name => Directory) then
+            Delete_Tree (Directory => Directory);
+         end if;
+         raise;
+   end Failed_Init_Cleanup;
+
+   -------------------------------------------------------------------------
+
    procedure Initialize (T : in out Testcase)
    is
    begin
@@ -809,6 +876,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Execute_Working_Directories'Access,
          Name    => "Preserve per-request working directories");
+      T.Add_Test_Routine
+        (Routine => Failed_Init_Cleanup'Access,
+         Name    => "Clean failed manager initialization");
       T.Add_Test_Routine
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");
@@ -920,8 +990,7 @@ package body Spawn.Pool.Tests is
          Assert
            (Condition => Ada.Strings.Fixed.Index
               (Source  => Ada.Exceptions.Exception_Message (X => E),
-               Pattern => "UNIX path too long '" & Dir
-                 & "/spawn_manager-") = 1,
+               Pattern => Dir & "/.sp-") > 0,
             Message   => "Relative socket diagnostic omits selected path");
       when others =>
          if Exists (Name => Dir) then
