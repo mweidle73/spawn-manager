@@ -35,6 +35,7 @@ package body Spawn_Manager_Processes is
 
    use type C.int;
    use type CS.chars_ptr;
+   use type Interfaces.Integer_64;
 
    Shell : constant String := "/bin/bash";
 
@@ -60,7 +61,7 @@ package body Spawn_Manager_Processes is
       Stdout_Path         : CS.chars_ptr;
       Stderr_Mode         : C.int;
       Stderr_Path         : CS.chars_ptr;
-      Timeout_MS          : C.int;
+      Timeout_MS          : C.long_long;
       Result              : access C_Result)
       return C.int
      with Import,
@@ -80,7 +81,7 @@ package body Spawn_Manager_Processes is
    function Create_Shell_Request
      (Command   : String;
       Directory : String;
-      Timeout   : Integer)
+      Timeout   : Interfaces.Integer_64)
       return Execution_Request
    is
       Arguments : String_Vectors.Vector;
@@ -278,7 +279,7 @@ package body Spawn_Manager_Processes is
          Stderr_Mode         =>
            C.int (Stream_Mode'Pos (Request.Standard_Error.Mode)),
          Stderr_Path         => Stderr_Path,
-         Timeout_MS          => C.int (Request.Timeout_MS),
+         Timeout_MS          => C.long_long (Request.Timeout_MS),
          Result              => Raw_Result'Access);
       pragma Unreferenced (Return_Code);
 

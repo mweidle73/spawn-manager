@@ -32,6 +32,7 @@ with Ada.Command_Line;
 with Ada.Strings.Unbounded;
 with Ada.Streams;
 with Ada.Exceptions;
+with Interfaces;
 
 with Anet.Sockets.Unix;
 with Anet.Streams;
@@ -168,7 +169,7 @@ begin
                  := Spawn_Manager_Processes.Create_Shell_Request
                    (Command   => To_String (Req.Command),
                     Directory => To_String (Req.Dir),
-                    Timeout   => Req.Timeout);
+                    Timeout   => Interfaces.Integer_64 (Req.Timeout));
                Result : Spawn_Manager_Processes.Execution_Result;
             begin
                Signal_Handler.Set_Running;

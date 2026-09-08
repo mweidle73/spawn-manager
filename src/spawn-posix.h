@@ -23,6 +23,8 @@
 #ifndef SPAWN_POSIX_H
 #define SPAWN_POSIX_H
 
+#include <stdint.h>
+
 enum spawn_posix_result_kind {
 	SPAWN_POSIX_EXITED = 0,
 	SPAWN_POSIX_SIGNALED = 1,
@@ -83,7 +85,7 @@ int spawn_posix_execute(
 	const char *stdout_path,
 	int stderr_mode,
 	const char *stderr_path,
-	int timeout_ms,
+	int64_t timeout_ms,
 	struct spawn_posix_result *result);
 
 /*

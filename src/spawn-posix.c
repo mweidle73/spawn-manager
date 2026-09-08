@@ -456,7 +456,7 @@ int spawn_posix_execute(
 	const char *stdout_path,
 	int stderr_mode,
 	const char *stderr_path,
-	int timeout_ms,
+	int64_t timeout_ms,
 	struct spawn_posix_result *result)
 {
 	int error_pipe[2];
@@ -534,7 +534,9 @@ int spawn_posix_execute(
 			SPAWN_POSIX_WAIT, errno);
 		goto cleanup;
 	}
-	deadline = timeout_ms < 0 ? -1 : started + timeout_ms;
+	deadline = timeout_ms < 0 ? -1
+		: timeout_ms > INT64_MAX - started ? INT64_MAX
+		: started + timeout_ms;
 
 	switch (wait_for_exec(error_pipe[0], deadline, &child_error)) {
 	case 2:

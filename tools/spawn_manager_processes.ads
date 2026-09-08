@@ -24,6 +24,7 @@
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
+with Interfaces;
 
 package Spawn_Manager_Processes is
 
@@ -56,7 +57,7 @@ package Spawn_Manager_Processes is
       Directory       : Ada.Strings.Unbounded.Unbounded_String;
       Standard_Output : Stream_Specification;
       Standard_Error  : Stream_Specification;
-      Timeout_MS      : Integer := -1;
+      Timeout_MS      : Interfaces.Integer_64 := Interfaces.Integer_64 (-1);
    end record;
 
    type Termination_Kind is
@@ -97,7 +98,7 @@ package Spawn_Manager_Processes is
    function Create_Shell_Request
      (Command   : String;
       Directory : String;
-      Timeout   : Integer)
+      Timeout   : Interfaces.Integer_64)
       return Execution_Request;
    --  Normalize one compatible shell command to the common launch model.
 
