@@ -1022,6 +1022,9 @@ package body Spawn.Pool.Tests is
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");
       T.Add_Test_Routine
+        (Routine => Pid_Setup_Structured_Target'Access,
+         Name    => "Preserve structured manager PID callback");
+      T.Add_Test_Routine
         (Routine => Pid_Setup_Target'Access,
          Name    => "Preserve manager PID callback");
       T.Add_Test_Routine
@@ -1209,6 +1212,83 @@ package body Spawn.Pool.Tests is
          end loop;
          raise;
    end Parallel_Execution;
+
+   -------------------------------------------------------------------------
+
+   procedure Pid_Setup_Structured_Target
+   is
+      use Ada.Directories;
+
+      Manager_PID : C.int := -1;
+      Output_Path : constant String := Current_Directory
+        & "/obj/pid-setup-parent.out";
+
+      procedure Capture_Manager
+        (Descriptor : GNAT.Expect.Process_Descriptor);
+      --  Record the manager selected for the structured request.
+
+      procedure Capture_Manager
+        (Descriptor : GNAT.Expect.Process_Descriptor)
+      is
+      begin
+         Manager_PID := C.int
+           (GNAT.Expect.Get_Pid (Descriptor => Descriptor));
+      end Capture_Manager;
+
+      Request : Spawn.Protocol.Exec_Request_Type;
+      Result  : Spawn.Protocol.Result_Type;
+   begin
+      if Exists (Name => Output_Path) then
+         Delete_File (Name => Output_Path);
+      end if;
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Ada.Text_IO.Put_Line'Access);
+      Request.Executable := To_Unbounded_String
+        (Current_Directory & "/obj/spawn_posix_tests");
+      Request.Arguments.Append ("fixture");
+      Request.Arguments.Append ("parent");
+      Request.Directory := To_Unbounded_String (Current_Directory);
+      Request.Standard_Output :=
+        (Mode => Spawn.Protocol.Truncate_File,
+         Path => To_Unbounded_String (Output_Path));
+      Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Timeout := 1_000;
+      Result := Spawn.Pool.Execute
+        (Request   => Request,
+         Pid_Setup => Capture_Manager'Access);
+      Assert
+        (Condition => Result.Kind = Spawn.Protocol.Exited
+           and then Result.Exit_Status = 0,
+         Message   => "pid-setup fixture failed");
+      Assert (Condition => Manager_PID > 0,
+              Message   => "pid-setup callback was not called");
+
+      declare
+         Output : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open
+           (File => Output,
+            Mode => Ada.Text_IO.In_File,
+            Name => Output_Path,
+            Form => "shared=no");
+         Assert
+           (Condition => C.int (Integer'Value
+              (Ada.Text_IO.Get_Line (File => Output))) = Manager_PID,
+            Message   => "pid-setup callback did not receive manager PID");
+         Ada.Text_IO.Close (File => Output);
+      end;
+
+      Spawn.Pool.Cleanup;
+      Delete_File (Name => Output_Path);
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         if Exists (Name => Output_Path) then
+            Delete_File (Name => Output_Path);
+         end if;
+         raise;
+   end Pid_Setup_Structured_Target;
 
    -------------------------------------------------------------------------
 

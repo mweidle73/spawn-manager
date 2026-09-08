@@ -75,6 +75,9 @@ package Spawn.Pool.Tests is
    procedure Parallel_Execution;
    --  Verify parallel command execution.
 
+   procedure Pid_Setup_Structured_Target;
+   --  Verify structured Pid_Setup receives the long-lived manager PID.
+
    procedure Pid_Setup_Target;
    --  Verify Pid_Setup receives the long-lived manager PID.
 
