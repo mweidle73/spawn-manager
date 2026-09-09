@@ -36,6 +36,9 @@ package Spawn.Pool.Tests is
    procedure Initialize (T : in out Testcase);
    --  Initialize testcase.
 
+   procedure Caller_Abort_Releases_Lease;
+   --  Verify task abort cannot strand an active manager lease.
+
    procedure Execute_Bin_True;
    --  Execute /bin/true.
 

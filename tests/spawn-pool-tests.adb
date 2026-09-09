@@ -118,6 +118,92 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Caller_Abort_Releases_Lease
+   is
+      protected type Start_Signal is
+         entry Wait;
+         procedure Mark;
+      private
+         Started : Boolean := False;
+      end Start_Signal;
+
+      protected body Start_Signal is
+         procedure Mark
+         is
+         begin
+            Started := True;
+         end Mark;
+
+         entry Wait when Started
+         is
+         begin
+            null;
+         end Wait;
+      end Start_Signal;
+
+      Signal : Start_Signal;
+
+      procedure Mark_Manager (Pid : GNAT.Expect.Process_Descriptor);
+      procedure Mark_Manager (Pid : GNAT.Expect.Process_Descriptor)
+      is
+         pragma Unreferenced (Pid);
+      begin
+         Signal.Mark;
+         --  Delay is an abort completion point after the manager lease has
+         --  been acquired but before a request can reach the socket.
+         delay 60.0;
+      end Mark_Manager;
+
+      task Worker is
+         entry Start;
+      end Worker;
+
+      task body Worker is
+      begin
+         accept Start;
+         Spawn.Pool.Execute
+           (Command   => "/bin/true",
+            Pid_Setup => Mark_Manager'Access);
+      end Worker;
+
+      Initialized : Boolean := False;
+   begin
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Worker.Start;
+      Signal.Wait;
+
+      --  Abort after Get_Socket but before Send_Receive. Ordinary exception
+      --  handlers do not run for this asynchronous transfer of control.
+      abort Worker;
+
+      --  Wait for finalization before Cleanup starts cancelling managers.
+      --  Otherwise Cleanup itself can wake the worker's socket operation and
+      --  let the normal release path mask a lease stranded by task abort.
+      while not Worker'Terminated loop
+         delay 0.010;
+      end loop;
+
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+      --  Cleanup must leave the package ready for the next Abuild run.
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         raise;
+   end Caller_Abort_Releases_Lease;
+
+   -------------------------------------------------------------------------
+
    procedure Cleanup_Relative_Socket
    is
       use Ada.Directories;
@@ -979,6 +1065,9 @@ package body Spawn.Pool.Tests is
    is
    begin
       T.Set_Name (Name => "Spawn pool tests");
+      T.Add_Test_Routine
+        (Routine => Caller_Abort_Releases_Lease'Access,
+         Name    => "Release lease after caller task abort");
       T.Add_Test_Routine
         (Routine => Duplicate_Init'Access,
          Name    => "Reject duplicate pool initialization");

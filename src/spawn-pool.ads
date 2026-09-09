@@ -112,13 +112,6 @@ private
       Available       : Boolean;
    end record;
 
-   function Send_Receive
-     (Cont    : Socket_Container;
-      Request : Ada.Streams.Stream_Element_Array;
-      First_Byte_Timeout_MS : Spawn.Protocol.Timeout_Milliseconds)
-      return Spawn.Protocol.Result_Type;
-   --  Exchange one exact frame and release Cont only after a valid result.
-
    L : Log_Procedure := null;
    --  Log procedure.
 

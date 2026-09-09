@@ -31,6 +31,7 @@ with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
+with Ada.Finalization;
 with Interfaces;
 with Interfaces.C;
 with Interfaces.C.Strings;
@@ -74,6 +75,26 @@ package body Spawn.Pool is
       Element_Type => Socket_Container);
    package SOMP renames Socket_Map_Package;
 
+   package Lease_Guards is
+      type Guard is new Ada.Finalization.Limited_Controlled with record
+         Container : Socket_Container;
+         Active    : Boolean := False;
+      end record;
+      --  Task-owned manager lease whose finalizer also runs during task abort.
+
+      procedure Abandon (Lease : in out Guard);
+      --  Poison the selected manager and return its active-count slot once.
+
+      overriding
+      procedure Finalize (Lease : in out Guard);
+      --  Abandon a lease when task abort skips ordinary exception handlers.
+
+      procedure Release (Lease : in out Guard);
+      --  Return a successfully used manager to the available pool.
+   end Lease_Guards;
+
+   subtype Lease_Guard is Lease_Guards.Guard;
+
    procedure Create_Private_Directory (Path : String);
    --  Atomically create Path with no group or other access.
 
@@ -87,7 +108,7 @@ package body Spawn.Pool is
 
    protected Sockets
    is
-      procedure Abandon_Socket (C : Socket_Container);
+      procedure Abandon_Socket (Lease : in out Lease_Guard);
       --  Return one failed lease without making its manager reusable.
 
       procedure Begin_Cleanup
@@ -101,10 +122,12 @@ package body Spawn.Pool is
       procedure Insert_Socket (S : Socket_Container);
       --  Insert new socket into store.
 
-      procedure Get_Socket (S : out Socket_Container);
-      --  Return non-busy socket container from socket store.
+      procedure Get_Socket (Lease : in out Lease_Guard);
+      --  Select a non-busy manager and activate Lease atomically. Task abort
+      --  is deferred for the complete protected action, so there is no gap
+      --  between incrementing Active_Count and arming Lease's finalizer.
 
-      procedure Release_Socket (C : Socket_Container);
+      procedure Release_Socket (Lease : in out Lease_Guard);
       --  Release given socket container.
 
       procedure Start_Initialization (Pool_Directory : String);
@@ -118,6 +141,40 @@ package body Spawn.Pool is
       Directory     : Unbounded_String;
       Shutting_Down : Boolean := False;
    end Sockets;
+
+   function Send_Receive
+     (Lease                 : in out Lease_Guard;
+      Request               : Ada.Streams.Stream_Element_Array;
+      First_Byte_Timeout_MS : Protocol.Timeout_Milliseconds)
+      return Protocol.Result_Type;
+   --  Exchange one exact frame and release or poison Lease exactly once.
+
+   -------------------------------------------------------------------------
+
+   package body Lease_Guards is
+
+      procedure Abandon (Lease : in out Guard)
+      is
+      begin
+         Sockets.Abandon_Socket (Lease => Lease);
+      end Abandon;
+
+      overriding
+      procedure Finalize (Lease : in out Guard)
+      is
+      begin
+         Abandon (Lease);
+      exception
+         when others => null;
+      end Finalize;
+
+      procedure Release (Lease : in out Guard)
+      is
+      begin
+         Sockets.Release_Socket (Lease => Lease);
+      end Release;
+
+   end Lease_Guards;
 
    -------------------------------------------------------------------------
 
@@ -297,24 +354,19 @@ package body Spawn.Pool is
             Active_Bound => Positive (Cmd_Buffer_Size));
          Data : Ada.Streams.Stream_Element_Array
            (1 .. Ada.Streams.Stream_Element_Offset (Length));
-         S : Socket_Container;
+         Lease : Lease_Guard;
       begin
          Protocol.Encode_Exec_Request
            (Request      => Request,
             Active_Bound => Positive (Cmd_Buffer_Size),
             Data         => Data);
-         Sockets.Get_Socket (S);
-         L (Msg => "Found available socket " & To_String (S.Address));
-         begin
-            Pid_Setup (S.Pid);
-         exception
-            when others =>
-               Sockets.Abandon_Socket (C => S);
-               raise;
-         end;
+         Sockets.Get_Socket (Lease);
+         L (Msg => "Found available socket "
+            & To_String (Lease.Container.Address));
+         Pid_Setup (Lease.Container.Pid);
          begin
             return Send_Receive
-              (Cont                  => S,
+              (Lease                 => Lease,
                Request               => Data,
                First_Byte_Timeout_MS =>
                  Result_Timeout (Child_Timeout => Request.Timeout));
@@ -356,7 +408,7 @@ package body Spawn.Pool is
          Active_Bound => Positive (Cmd_Buffer_Size));
       Data : Ada.Streams.Stream_Element_Array
         (1 .. Ada.Streams.Stream_Element_Offset (Length));
-      S      : Socket_Container;
+      Lease  : Lease_Guard;
       Result : Protocol.Result_Type;
    begin
       L (Msg => "Executing command '" & Command & "'");
@@ -366,20 +418,15 @@ package body Spawn.Pool is
          Active_Bound => Positive (Cmd_Buffer_Size),
          Data         => Data);
 
-      Sockets.Get_Socket (S);
-      L (Msg => "Found available socket " & To_String (S.Address));
+      Sockets.Get_Socket (Lease);
+      L (Msg => "Found available socket "
+         & To_String (Lease.Container.Address));
 
-      begin
-         Pid_Setup (S.Pid);
-      exception
-         when others =>
-            Sockets.Abandon_Socket (C => S);
-            raise;
-      end;
+      Pid_Setup (Lease.Container.Pid);
 
       begin
          Result := Send_Receive
-           (Cont                  => S,
+           (Lease                 => Lease,
             Request               => Data,
             First_Byte_Timeout_MS =>
               Result_Timeout
@@ -674,23 +721,23 @@ package body Spawn.Pool is
    -------------------------------------------------------------------------
 
    function Send_Receive
-     (Cont    : Socket_Container;
-      Request : Ada.Streams.Stream_Element_Array;
+     (Lease                 : in out Lease_Guard;
+      Request               : Ada.Streams.Stream_Element_Array;
       First_Byte_Timeout_MS : Protocol.Timeout_Milliseconds)
       return Protocol.Result_Type
    is
-      Result       : Protocol.Result_Type;
-      Lease_Active : Boolean := True;
+      Result : Protocol.Result_Type;
    begin
-      L (Msg => "Sending request using socket " & To_String (Cont.Address));
+      L (Msg => "Sending request using socket "
+         & To_String (Lease.Container.Address));
 
       Spawn.Transport.Send_Frame
-        (Descriptor => Cont.Socket.Get_Socket,
+        (Descriptor => Lease.Container.Socket.Get_Socket,
          Data       => Request);
       declare
          Response : constant Ada.Streams.Stream_Element_Array
            := Spawn.Transport.Receive_Frame
-             (Descriptor            => Cont.Socket.Get_Socket,
+             (Descriptor            => Lease.Container.Socket.Get_Socket,
               Active_Bound          => Positive (Cmd_Buffer_Size),
               First_Byte_Timeout_MS => First_Byte_Timeout_MS);
       begin
@@ -699,27 +746,30 @@ package body Spawn.Pool is
             Active_Bound => Positive (Cmd_Buffer_Size),
             Result       => Result);
       end;
-      Sockets.Release_Socket (C => Cont);
-      Lease_Active := False;
-      L (Msg => "Socket " & To_String (Cont.Address) & " released");
+      Lease_Guards.Release (Lease);
+      L (Msg => "Socket " & To_String (Lease.Container.Address)
+         & " released");
       return Result;
 
    exception
       when others =>
-         if Lease_Active then
+         if Lease.Active then
             begin
-               Log_A_File (Filename => To_String (Cont.Address & ".log"));
+               Log_A_File
+                 (Filename => To_String (Lease.Container.Address & ".log"));
             exception
                when others => null;
             end;
             begin
-               L (Msg => "Socket " & To_String (Cont.Address) & " abandoned");
+               L (Msg => "Socket " & To_String (Lease.Container.Address)
+                  & " abandoned");
             exception
                when others => null;
             end;
-            Sockets.Abandon_Socket (C => Cont);
+            Lease_Guards.Abandon (Lease);
          else
-            Log_A_File (Filename => To_String (Cont.Address & ".log"));
+            Log_A_File
+              (Filename => To_String (Lease.Container.Address & ".log"));
          end if;
          raise;
    end Send_Receive;
@@ -730,16 +780,21 @@ package body Spawn.Pool is
    is
       -------------------------------------------------------------------------
 
-      procedure Abandon_Socket (C : Socket_Container)
+      procedure Abandon_Socket (Lease : in out Lease_Guard)
       is
-         Position : constant SOMP.Cursor := Data.Find (Key => C.Address);
+         Position : constant SOMP.Cursor
+           := Data.Find (Key => Lease.Container.Address);
       begin
+         if not Lease.Active then
+            return;
+         end if;
          if not SOMP.Has_Element (Position => Position)
            or else Active_Count = 0
          then
             raise Program_Error with "invalid abandoned manager lease";
          end if;
          Active_Count := Active_Count - 1;
+         Lease.Active := False;
       end Abandon_Socket;
 
       ----------------------------------------------------------------------
@@ -769,7 +824,7 @@ package body Spawn.Pool is
 
       ----------------------------------------------------------------------
 
-      procedure Get_Socket (S : out Socket_Container)
+      procedure Get_Socket (Lease : in out Lease_Guard)
       is
          Pos   : SOMP.Cursor := Data.First;
          Found : Boolean     := False;
@@ -792,11 +847,12 @@ package body Spawn.Pool is
             raise Pool_Error with "spawn manager pool is shutting down";
          end if;
          while SOMP.Has_Element (Position => Pos) loop
-            S := SOMP.Element (Position => Pos);
-            if S.Available then
+            Lease.Container := SOMP.Element (Position => Pos);
+            if Lease.Container.Available then
                Data.Update_Element (Position => Pos,
                                     Process  => Set_Busy'Access);
                Active_Count := Active_Count + 1;
+               Lease.Active := True;
                Found := True;
                exit;
             end if;
@@ -823,7 +879,7 @@ package body Spawn.Pool is
 
       ----------------------------------------------------------------------
 
-      procedure Release_Socket (C : Socket_Container)
+      procedure Release_Socket (Lease : in out Lease_Guard)
       is
          procedure Set_Available
            (Key     :        Unbounded_String;
@@ -839,8 +895,12 @@ package body Spawn.Pool is
             Element.Available := True;
          end Set_Available;
 
-         Pos : constant SOMP.Cursor := Data.Find (Key => C.Address);
+         Pos : constant SOMP.Cursor
+           := Data.Find (Key => Lease.Container.Address);
       begin
+         if not Lease.Active then
+            return;
+         end if;
          if not SOMP.Has_Element (Position => Pos)
            or else Active_Count = 0
          then
@@ -851,6 +911,7 @@ package body Spawn.Pool is
                                  Process  => Set_Available'Access);
          end if;
          Active_Count := Active_Count - 1;
+         Lease.Active := False;
       end Release_Socket;
 
       ----------------------------------------------------------------------
