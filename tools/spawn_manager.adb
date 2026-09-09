@@ -56,6 +56,7 @@ is
      (Source : Unbounded_String)
       return String
       renames Ada.Strings.Unbounded.To_String;
+   --  Keep wire-to-internal string conversions compact at request boundaries.
 
    Sock_Listen, Sock_Comm : aliased Anet.Sockets.Unix.TCP_Socket_Type;
 
@@ -66,6 +67,11 @@ is
      (Result : Spawn_Manager_Processes.Execution_Result)
       return Spawn.Protocol.Result_Type;
    --  Translate the common execution result without losing termination data.
+
+   function To_Protocol_Stage
+     (Stage : Spawn_Manager_Processes.Failure_Stage)
+      return Spawn.Protocol.Failure_Stage;
+   --  Translate a C-core failure stage without relying on enum positions.
 
    -------------------------------------------------------------------------
 
@@ -100,18 +106,66 @@ is
             return (Kind => Spawn.Protocol.Timed_Out);
          when Spawn_Manager_Processes.Spawn_Failed
             | Spawn_Manager_Processes.Internal_Error =>
+            --  Version 1 deliberately has one execution-boundary failure
+            --  alternative. Stage and errno retain the actionable failure
+            --  point; the internal-versus-spawn classification is not public.
             return
               (Kind    => Spawn.Protocol.Spawn_Failed,
                Failure =>
-                 (Stage => Spawn.Protocol.Failure_Stage'Val
-                    (Spawn_Manager_Processes.Failure_Stage'Pos
-                       (Result.Stage)),
+                 (Stage => To_Protocol_Stage (Result.Stage),
                   Error_Number => Interfaces.Unsigned_32
                     (Result.Error_Number),
                   Diagnostic => To_Unbounded_String
                     (Spawn_Manager_Processes.Diagnostic (Result))));
       end case;
    end To_Protocol_Result;
+
+   -------------------------------------------------------------------------
+
+   function To_Protocol_Stage
+     (Stage : Spawn_Manager_Processes.Failure_Stage)
+      return Spawn.Protocol.Failure_Stage
+   is
+   begin
+      case Stage is
+         when Spawn_Manager_Processes.No_Failure =>
+            return Spawn.Protocol.No_Failure;
+         when Spawn_Manager_Processes.Enable_Subreaper =>
+            return Spawn.Protocol.Enable_Subreaper;
+         when Spawn_Manager_Processes.Create_Error_Pipe =>
+            return Spawn.Protocol.Create_Error_Pipe;
+         when Spawn_Manager_Processes.Fork_Child =>
+            return Spawn.Protocol.Fork_Child;
+         when Spawn_Manager_Processes.Process_Group =>
+            return Spawn.Protocol.Process_Group;
+         when Spawn_Manager_Processes.Parent_Death =>
+            return Spawn.Protocol.Parent_Death;
+         when Spawn_Manager_Processes.Open_Stdin =>
+            return Spawn.Protocol.Open_Stdin;
+         when Spawn_Manager_Processes.Open_Stdout =>
+            return Spawn.Protocol.Open_Stdout;
+         when Spawn_Manager_Processes.Open_Stderr =>
+            return Spawn.Protocol.Open_Stderr;
+         when Spawn_Manager_Processes.Duplicate_Stdin =>
+            return Spawn.Protocol.Duplicate_Stdin;
+         when Spawn_Manager_Processes.Duplicate_Stdout =>
+            return Spawn.Protocol.Duplicate_Stdout;
+         when Spawn_Manager_Processes.Duplicate_Stderr =>
+            return Spawn.Protocol.Duplicate_Stderr;
+         when Spawn_Manager_Processes.Change_Directory =>
+            return Spawn.Protocol.Change_Directory;
+         when Spawn_Manager_Processes.Reset_Signals =>
+            return Spawn.Protocol.Reset_Signals;
+         when Spawn_Manager_Processes.Close_Descriptors =>
+            return Spawn.Protocol.Close_Descriptors;
+         when Spawn_Manager_Processes.Exec_Target =>
+            return Spawn.Protocol.Exec_Target;
+         when Spawn_Manager_Processes.Wait_Child =>
+            return Spawn.Protocol.Wait_Child;
+         when Spawn_Manager_Processes.Terminate_Group =>
+            return Spawn.Protocol.Terminate_Group;
+      end case;
+   end To_Protocol_Stage;
 
    Buffer_Size : Positive;
    Socket_Path : Unbounded_String;

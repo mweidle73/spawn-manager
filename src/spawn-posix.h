@@ -73,7 +73,9 @@ struct spawn_posix_result {
  * argv includes argv[0] and ends with NULL. When inherit_environment is
  * nonzero, envp is ignored and the immutable manager environment is inherited.
  * Otherwise envp describes the complete replacement environment and ends with
- * NULL. A timeout of -1 waits indefinitely.
+ * NULL. A timeout of -1 waits indefinitely. The return value is zero for every
+ * classified child or spawn result and -1 only when result describes an
+ * internal supervision failure.
  */
 int spawn_posix_execute(
 	const char *executable,

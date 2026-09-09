@@ -56,6 +56,7 @@ package body Spawn.Transport is
      with Import,
           Convention    => C,
           External_Name => "poll";
+   --  Wait on the one nonblocking control descriptor without blocking Ada.
 
    function C_Fcntl
      (Descriptor : C.int;
@@ -65,6 +66,7 @@ package body Spawn.Transport is
      with Import,
           Convention    => C,
           External_Name => "fcntl";
+   --  Read or update close-on-exec flags on one control descriptor.
 
    function C_Recv
      (Descriptor : C.int;
@@ -75,6 +77,7 @@ package body Spawn.Transport is
      with Import,
           Convention    => C,
           External_Name => "recv";
+   --  Receive one available frame fragment from a nonblocking socket.
 
    function C_Send
      (Descriptor : C.int;
@@ -85,6 +88,7 @@ package body Spawn.Transport is
      with Import,
           Convention    => C,
           External_Name => "send";
+   --  Send one frame fragment while suppressing SIGPIPE.
 
    type Deadline_Type is record
       Started    : Ada.Real_Time.Time;
@@ -317,6 +321,9 @@ package body Spawn.Transport is
       if Elapsed_Duration <= 0.0 then
          Remaining_MS := Deadline.Timeout_MS;
       else
+         --  Fixed-point-to-integer conversion may round upward. Subtract one
+         --  positive millisecond so poll cannot expire before the monotonic
+         --  deadline; the next loop iteration recomputes the exact remainder.
          Elapsed_MS := Interfaces.Integer_64 (Elapsed_Duration * 1_000);
          if Elapsed_MS > 0 then
             Elapsed_MS := Elapsed_MS - 1;
@@ -385,6 +392,8 @@ package body Spawn.Transport is
 
    procedure Set_Close_On_Exec (Descriptor : C.int)
    is
+      --  Linux uses these stable fcntl command and descriptor-flag values.
+      --  Keeping them local avoids adding another C shim to the transport.
       F_Getfd    : constant := 1;
       F_Setfd    : constant := 2;
       Fd_Cloexec : constant := 1;
@@ -447,6 +456,9 @@ package body Spawn.Transport is
              (Returned => Item.Returned,
               Event    => Anet.Constants.Sys.POLLHUP)
          then
+            --  The following send or receive owns classification of closure
+            --  and the exact errno; poll only establishes nonblocking
+            --  progress.
             return;
          end if;
       end loop;

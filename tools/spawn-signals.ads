@@ -46,6 +46,8 @@ package Spawn.Signals is
 
    private
       procedure Handle_Signal;
+      --  Close manager sockets, terminate any active group and exit promptly.
+
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGINT);
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGTERM);
 

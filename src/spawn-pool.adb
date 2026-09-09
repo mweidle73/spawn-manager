@@ -61,11 +61,13 @@ package body Spawn.Pool is
      with Import,
           Convention    => C,
           External_Name => "chmod";
+   --  Set exact owner-only permissions after mkdir regardless of caller umask.
 
    function C_Mkdir (Path : CS.chars_ptr; Mode : C.unsigned) return C.int
      with Import,
           Convention    => C,
           External_Name => "mkdir";
+   --  Atomically create the private directory and detect name collisions.
 
    package Socket_Map_Package is new Ada.Containers.Ordered_Maps
      (Key_Type     => Unbounded_String,

@@ -44,7 +44,11 @@ package Spawn_Manager_Processes is
       Element_Type => Environment_Entry);
 
    type Environment_Mode is (Inherit, Replace);
+   --  Shell requests inherit the immutable manager environment; structured
+   --  requests replace it completely, including with an empty vector.
+
    type Stream_Mode is (Null_Stream, Truncate_File);
+   --  Version 1 permits only /dev/null or a newly truncated regular output.
 
    type Stream_Specification is record
       Mode : Stream_Mode := Null_Stream;
@@ -61,6 +65,7 @@ package Spawn_Manager_Processes is
       Standard_Error  : Stream_Specification;
       Timeout_MS      : Interfaces.Integer_64 := Interfaces.Integer_64 (-1);
    end record;
+   --  Fully normalized launch data consumed by the single POSIX boundary.
 
    type Termination_Kind is
      (Exited,
@@ -96,6 +101,7 @@ package Spawn_Manager_Processes is
       Stage         : Failure_Stage := No_Failure;
       Error_Number  : Natural := 0;
    end record;
+   --  Complete C-boundary result before conversion to the wire alternatives.
 
    function Create_Shell_Request
      (Command   : String;
@@ -114,8 +120,5 @@ package Spawn_Manager_Processes is
 
    function Execute (Request : Execution_Request) return Execution_Result;
    --  Validate and execute one immutable request through the POSIX core.
-
-   function File_Stream (Path : String) return Stream_Specification;
-   --  Construct a truncate-file stream for a validated absolute path.
 
 end Spawn_Manager_Processes;

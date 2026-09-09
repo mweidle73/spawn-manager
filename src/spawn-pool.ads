@@ -45,6 +45,7 @@ package Spawn.Pool is
    type Log_Procedure is access procedure (Msg : String);
 
    procedure No_Log (Msg : String) is null;
+   --  Discard one optional pool diagnostic.
 
    procedure Init
      (Manager_Path   : String;
@@ -53,21 +54,17 @@ package Spawn.Pool is
       Socket_Timeout : Duration      := 3.0;
       Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access);
-   --  Init the pool with the manager at the explicit absolute Manager_Path.
-   --  Socket_Dir is the parent of one randomized mode-0700 directory owned by
-   --  this pool. That private directory stores all manager communication
-   --  sockets. The optional log procedure is used for additional runtime
-   --  information. The optional socket timeout
-   --  argument defines the duration to wait for the appearance of each
-   --  (1 .. Manager_Count) communication socket. A timeout raises an
-   --  exception.
-   --  The Buffer_Size argument specifies the size of the command buffer used
-   --  in the spawned managers to receive commands. A relative Socket_Dir
-   --  remains relative for the bounded transport address. Init separately
-   --  captures its absolute cleanup path so later caller-directory changes do
-   --  not affect removal.
+   --  Start Manager_Count processes from the explicit absolute Manager_Path.
+   --  Socket_Dir owns one randomized mode-0700 directory containing every
+   --  manager socket. Socket_Timeout bounds each manager's startup.
+   --  Buffer_Size is the active request and response frame bound and may not
+   --  exceed the fixed protocol maximum. A relative Socket_Dir remains
+   --  relative on the wire to protect the AF_UNIX length budget; Init
+   --  separately captures its absolute spelling so later directory changes
+   --  cannot break cleanup.
 
    procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
+   --  Leave the selected long-lived manager in its current process context.
 
    procedure Execute
      (Command   : String;
@@ -75,10 +72,10 @@ package Spawn.Pool is
       Timeout   : Integer := -1;
       Pid_Setup : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
-   --  Execute command in given directory. The Timeout parameter specifies the
-   --  time in milliseconds after the command times out (the default is no
-   --  timeout (-1)). If a timeout occurs, a Command_Failed exception is raised
-   --  to indicate failure.
+   --  Execute Command as `/bin/bash -o pipefail -c` in Directory. Timeout is
+   --  measured in milliseconds and -1 means unlimited. Pid_Setup receives the
+   --  long-lived manager before it forks the shell. Raise Command_Failed for
+   --  every result other than exit status zero.
 
    function Execute
      (Request   : Spawn.Protocol.Exec_Request_Type;
@@ -86,6 +83,8 @@ package Spawn.Pool is
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
       return Spawn.Protocol.Result_Type;
    --  Execute one structured request and return its exact termination result.
+   --  Pid_Setup receives the selected long-lived manager before it forks the
+   --  request child; concurrent calls acquire independent manager leases.
 
    procedure Execute_Checked
      (Request   : Spawn.Protocol.Exec_Request_Type;
@@ -94,7 +93,8 @@ package Spawn.Pool is
    --  Execute one structured request and raise unless it exits with status 0.
 
    procedure Cleanup;
-   --  Cleanup spawn pool.
+   --  Stop new leases, cancel every manager, wait for active callers to leave
+   --  the pool and remove all socket state. Cleanup cancels the complete pool.
 
    Pool_Error         : exception;
    Command_Failed     : exception;

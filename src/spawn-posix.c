@@ -44,6 +44,12 @@
 #define POLL_SLICE_MS 10
 #define TERMINATION_GRACE_MS 100
 
+/*
+ * ERROR_FD is the sole descriptor intentionally kept across child setup. The
+ * close sweep starts at four, then FD_CLOEXEC closes this error channel only
+ * after execve has successfully replaced the child image.
+ */
+
 extern char **environ;
 
 /*
@@ -60,6 +66,13 @@ static volatile sig_atomic_t active_group;
  * closes the complete live range independently of this value.
  */
 static int descriptor_ceiling = -1;
+
+/*
+ * Subreaper mode makes orphaned in-group descendants waitable by this manager,
+ * so termination can reap the complete request group instead of only its
+ * leader. It is process-wide and therefore enabled once in this single-
+ * threaded manager.
+ */
 static int subreaper_enabled;
 
 struct child_error {
@@ -107,8 +120,10 @@ static int remaining_milliseconds(int64_t deadline)
 
 /*
  * Snapshot the finite descriptor range in the parent. This keeps the
- * post-fork fallback to close_range(2) free of directory access and
- * allocation. No other thread can create a descriptor before fork.
+ * post-fork fallback used when close_range(2) is unavailable free of directory
+ * access and allocation. The manager is single-threaded, and every persistent
+ * descriptor exists before the first request, so later requests cannot raise
+ * this ceiling in the parent.
  */
 static int highest_open_descriptor(void)
 {
@@ -446,6 +461,16 @@ void spawn_posix_terminate_current(void)
 	errno = saved_errno;
 }
 
+/*
+ * The parent side owns one linear lifecycle:
+ *
+ *   prepare error channel -> fork -> confirm exec -> wait for leader
+ *       -> terminate remaining group members -> close all local descriptors
+ *
+ * Every exit after a successful fork reaches cleanup. A normal result returns
+ * zero; -1 means the result record describes an internal supervision failure.
+ * Expected exec failures and child termination results still return zero.
+ */
 int spawn_posix_execute(
 	const char *executable,
 	char *const argv[],

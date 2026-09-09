@@ -47,9 +47,11 @@ package body Spawn_Manager_Processes is
       Error_Number  : C.int;
    end record
      with Convention => C;
+   --  C-compatible result record mirrored by struct spawn_posix_result.
 
    type C_String_Array is array (Natural range <>) of aliased CS.chars_ptr
      with Convention => C;
+   --  NUL-terminated argv or envp pointer vector passed to the C boundary.
 
    function C_Execute
      (Executable          : CS.chars_ptr;
@@ -77,6 +79,18 @@ package body Spawn_Manager_Processes is
 
    procedure Require_C_String (Value : String; Name : String);
    --  Reject a value which cannot be represented by a C string.
+
+   function To_C_Environment_Mode (Mode : Environment_Mode) return C.int;
+   --  Map environment policy to the C boundary's explicit boolean value.
+
+   function To_C_Stream_Mode (Mode : Stream_Mode) return C.int;
+   --  Map stream policy without relying on Ada enumeration positions.
+
+   function To_Failure_Stage (Value : C.int) return Failure_Stage;
+   --  Map one range-checked C failure-stage value explicitly.
+
+   function To_Termination_Kind (Value : C.int) return Termination_Kind;
+   --  Map one range-checked C result-kind value explicitly.
 
    function Create_Exec_Request
      (Request : Spawn.Protocol.Exec_Request_Type)
@@ -241,10 +255,10 @@ package body Spawn_Manager_Processes is
             return (Kind => Internal_Error, others => <>);
          end if;
          return
-           (Kind          => Termination_Kind'Val (Kind_Position),
+           (Kind          => To_Termination_Kind (Raw_Result.Kind),
             Exit_Status   => Integer (Raw_Result.Exit_Status),
             Signal_Number => Natural (Raw_Result.Signal_Number),
-            Stage         => Failure_Stage'Val (Stage_Position),
+            Stage         => To_Failure_Stage (Raw_Result.Stage),
             Error_Number  => Natural (Raw_Result.Error_Number));
       end To_Result;
 
@@ -317,18 +331,20 @@ package body Spawn_Manager_Processes is
       Return_Code := C_Execute
         (Executable          => Executable,
          Arguments           => C_Arguments'Address,
-         Inherit_Environment =>
-           C.int (Boolean'Pos (Request.Environment_Use = Inherit)),
+         Inherit_Environment => To_C_Environment_Mode
+           (Mode => Request.Environment_Use),
          Environment         => C_Environment'Address,
          Directory           => Directory,
-         Stdout_Mode         =>
-           C.int (Stream_Mode'Pos (Request.Standard_Output.Mode)),
+         Stdout_Mode         => To_C_Stream_Mode
+           (Mode => Request.Standard_Output.Mode),
          Stdout_Path         => Stdout_Path,
-         Stderr_Mode         =>
-           C.int (Stream_Mode'Pos (Request.Standard_Error.Mode)),
+         Stderr_Mode         => To_C_Stream_Mode
+           (Mode => Request.Standard_Error.Mode),
          Stderr_Path         => Stderr_Path,
          Timeout_MS          => C.long_long (Request.Timeout_MS),
          Result              => Raw_Result'Access);
+      --  The C return value only distinguishes its Internal_Error variant;
+      --  Raw_Result remains the single detailed result translated below.
       pragma Unreferenced (Return_Code);
 
       Free_Inputs;
@@ -339,16 +355,6 @@ package body Spawn_Manager_Processes is
          Free_Inputs;
          raise;
    end Execute;
-
-   -------------------------------------------------------------------------
-
-   function File_Stream (Path : String) return Stream_Specification
-   is
-   begin
-      Require_Absolute (Value => Path, Name => "stream path");
-      return (Mode => Truncate_File,
-              Path => US.To_Unbounded_String (Path));
-   end File_Stream;
 
    -------------------------------------------------------------------------
 
@@ -376,5 +382,72 @@ package body Spawn_Manager_Processes is
          raise Constraint_Error with Name & " contains NUL";
       end if;
    end Require_C_String;
+
+   -------------------------------------------------------------------------
+
+   function To_C_Environment_Mode (Mode : Environment_Mode) return C.int
+   is
+   begin
+      case Mode is
+         when Replace => return 0;
+         when Inherit => return 1;
+      end case;
+   end To_C_Environment_Mode;
+
+   -------------------------------------------------------------------------
+
+   function To_C_Stream_Mode (Mode : Stream_Mode) return C.int
+   is
+   begin
+      case Mode is
+         when Null_Stream   => return 0;
+         when Truncate_File => return 1;
+      end case;
+   end To_C_Stream_Mode;
+
+   -------------------------------------------------------------------------
+
+   function To_Failure_Stage (Value : C.int) return Failure_Stage
+   is
+   begin
+      case Value is
+         when 0  => return No_Failure;
+         when 1  => return Enable_Subreaper;
+         when 2  => return Create_Error_Pipe;
+         when 3  => return Fork_Child;
+         when 4  => return Process_Group;
+         when 5  => return Parent_Death;
+         when 6  => return Open_Stdin;
+         when 7  => return Open_Stdout;
+         when 8  => return Open_Stderr;
+         when 9  => return Duplicate_Stdin;
+         when 10 => return Duplicate_Stdout;
+         when 11 => return Duplicate_Stderr;
+         when 12 => return Change_Directory;
+         when 13 => return Reset_Signals;
+         when 14 => return Close_Descriptors;
+         when 15 => return Exec_Target;
+         when 16 => return Wait_Child;
+         when 17 => return Terminate_Group;
+         when others =>
+            raise Program_Error with "invalid C failure stage";
+      end case;
+   end To_Failure_Stage;
+
+   -------------------------------------------------------------------------
+
+   function To_Termination_Kind (Value : C.int) return Termination_Kind
+   is
+   begin
+      case Value is
+         when 0 => return Exited;
+         when 1 => return Signaled;
+         when 2 => return Timed_Out;
+         when 3 => return Spawn_Failed;
+         when 4 => return Internal_Error;
+         when others =>
+            raise Program_Error with "invalid C termination kind";
+      end case;
+   end To_Termination_Kind;
 
 end Spawn_Manager_Processes;
