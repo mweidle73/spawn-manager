@@ -28,6 +28,7 @@ with Interfaces;
 package body Spawn.Protocol.Tests is
 
    use Ahven;
+   use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Array;
    use type Ada.Streams.Stream_Element_Offset;
    use type Interfaces.Integer_64;
@@ -313,6 +314,70 @@ package body Spawn.Protocol.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Failure_Stage_Golden_Data
+   is
+      type Stage_Code_Array is array (Failure_Stage) of Natural;
+      Codes : constant Stage_Code_Array
+        := (No_Failure          => 0,
+            Enable_Subreaper    => 1,
+            Create_Error_Pipe   => 2,
+            Fork_Child          => 3,
+            Process_Group       => 4,
+            Parent_Death        => 5,
+            Open_Stdin          => 6,
+            Open_Stdout         => 7,
+            Open_Stderr         => 8,
+            Duplicate_Stdin     => 9,
+            Duplicate_Stdout    => 10,
+            Duplicate_Stderr    => 11,
+            Change_Directory    => 12,
+            Reset_Signals       => 13,
+            Close_Descriptors   => 14,
+            Exec_Target         => 15,
+            Wait_Child          => 16,
+            Terminate_Group     => 17);
+      --  Independent one-based locations derived from the documented frame:
+      --  twelve header bytes, one result-kind byte, then the stage u16.
+      Stage_High : constant Ada.Streams.Stream_Element_Offset := 14;
+      Stage_Low  : constant Ada.Streams.Stream_Element_Offset := 15;
+   begin
+      for Stage in Failure_Stage loop
+         declare
+            Expected : constant Result_Type
+              := (Kind    => Spawn_Failed,
+                  Failure =>
+                    (Stage        => Stage,
+                     Error_Number => 0,
+                     Diagnostic   =>
+                       Ada.Strings.Unbounded.Null_Unbounded_String));
+            Data : Ada.Streams.Stream_Element_Array (1 .. 23);
+            Decoded : Result_Type;
+         begin
+            Encode_Result
+              (Result       => Expected,
+               Active_Bound => Maximum_Frame_Size,
+               Data         => Data);
+            Assert
+              (Condition => Data (Stage_High) = 0
+                 and then Natural (Data (Stage_Low)) = Codes (Stage),
+               Message   => "failure stage code differs for "
+                 & Stage'Image);
+
+            Data (Stage_High) := 0;
+            Data (Stage_Low) := Ada.Streams.Stream_Element (Codes (Stage));
+            Decode_Result
+              (Data         => Data,
+               Active_Bound => Maximum_Frame_Size,
+               Result       => Decoded);
+            Assert (Condition => Decoded = Expected,
+                    Message   => "failure stage decode differs for "
+                      & Stage'Image);
+         end;
+      end loop;
+   end Failure_Stage_Golden_Data;
+
+   -------------------------------------------------------------------------
+
    procedure Header_Bounds
    is
       Header : Header_Type;
@@ -464,7 +529,10 @@ package body Spawn.Protocol.Tests is
          Name    => "Reject invalid headers");
       T.Add_Test_Routine
         (Routine => Result_Golden_Data'Access,
-         Name    => "Encode and decode golden result");
+         Name    => "Encode and decode golden results");
+      T.Add_Test_Routine
+        (Routine => Failure_Stage_Golden_Data'Access,
+         Name    => "Pin spawn-failure stage numbers");
       T.Add_Test_Routine
         (Routine => Result_Roundtrip_Alternatives'Access,
          Name    => "Round trip result alternatives");
@@ -486,45 +554,108 @@ package body Spawn.Protocol.Tests is
 
    procedure Result_Golden_Data
    is
-      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 27)
-        := (16#53#, 16#50#, 16#57#, 16#4e#,
+      procedure Check
+        (Expected : Result_Type;
+         Golden   : Ada.Streams.Stream_Element_Array;
+         Name     : String);
+      --  Compare both encoding directions with one independently written
+      --  complete frame from the version 1 field table.
+
+      procedure Check
+        (Expected : Result_Type;
+         Golden   : Ada.Streams.Stream_Element_Array;
+         Name     : String)
+      is
+         Data    : Ada.Streams.Stream_Element_Array (Golden'Range);
+         Decoded : Result_Type;
+      begin
+         Assert
+           (Condition => Result_Frame_Length
+              (Result       => Expected,
+               Active_Bound => Maximum_Frame_Size) = Golden'Length,
+            Message   => Name & " frame length differs");
+         Encode_Result
+           (Result       => Expected,
+            Active_Bound => Maximum_Frame_Size,
+            Data         => Data);
+         Assert (Condition => Data = Golden,
+                 Message   => Name & " golden bytes differ");
+
+         Decode_Result
+           (Data         => Golden,
+            Active_Bound => Maximum_Frame_Size,
+            Result       => Decoded);
+         Assert (Condition => Decoded = Expected,
+                 Message   => Name & " decoded result differs");
+      end Check;
+   begin
+      Check
+        (Expected => (Kind => Exited, Exit_Status => 16#fedc_ba98#),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#05#,
+            16#00#, 16#fe#, 16#dc#, 16#ba#, 16#98#),
+         Name     => "exit result");
+      Check
+        (Expected => (Kind => Signaled, Signal_Number => 15),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#03#,
+            16#01#, 16#00#, 16#0f#),
+         Name     => "signal result");
+      Check
+        (Expected => (Kind => Timed_Out),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#02#),
+         Name     => "timeout result");
+      Check
+        (Expected =>
+           (Kind    => Spawn_Failed,
+            Failure =>
+              (Stage        => Exec_Target,
+               Error_Number => 2,
+               Diagnostic   => Ada.Strings.Unbounded.To_Unbounded_String
+                 ("exec"))),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
             16#00#, 16#01#, 16#00#, 16#03#,
             16#00#, 16#00#, 16#00#, 16#0f#,
             16#03#, 16#00#, 16#0f#,
             16#00#, 16#00#, 16#00#, 16#02#,
             16#00#, 16#00#, 16#00#, 16#04#,
-            16#65#, 16#78#, 16#65#, 16#63#);
-      Expected : constant Result_Type
-        := (Kind    => Spawn_Failed,
-            Failure =>
-              (Stage        => Exec_Target,
-               Error_Number => 2,
-               Diagnostic   => Ada.Strings.Unbounded.To_Unbounded_String
-                 ("exec")));
-      Data    : Ada.Streams.Stream_Element_Array (Golden'Range);
-      Decoded : Result_Type;
-   begin
-      Assert
-        (Condition => Result_Frame_Length
-           (Result       => Expected,
-            Active_Bound => Maximum_Frame_Size) = Golden'Length,
-         Message   => "result frame length differs");
-      Encode_Result
-        (Result       => Expected,
-         Active_Bound => Maximum_Frame_Size,
-         Data         => Data);
-      Assert (Condition => Data = Golden,
-              Message   => "result golden bytes differ");
-
-      Decode_Result
-        (Data         => Golden,
-         Active_Bound => Maximum_Frame_Size,
-         Result       => Decoded);
-      Assert (Condition => Decoded = Expected,
-              Message   => "decoded result differs");
+            16#65#, 16#78#, 16#65#, 16#63#),
+         Name     => "spawn-failure result");
+      Check
+        (Expected =>
+           (Kind       => Request_Rejected,
+            Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+              ("bad request")),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#10#,
+            16#04#, 16#00#, 16#00#, 16#00#, 16#0b#,
+            16#62#, 16#61#, 16#64#, 16#20#, 16#72#, 16#65#,
+            16#71#, 16#75#, 16#65#, 16#73#, 16#74#),
+         Name     => "request-rejection result");
+      Check
+        (Expected =>
+           (Kind       => Protocol_Failed,
+            Diagnostic => Ada.Strings.Unbounded.To_Unbounded_String
+              ("bad frame")),
+         Golden   =>
+           (16#53#, 16#50#, 16#57#, 16#4e#,
+            16#00#, 16#01#, 16#00#, 16#03#,
+            16#00#, 16#00#, 16#00#, 16#0e#,
+            16#05#, 16#00#, 16#00#, 16#00#, 16#09#,
+            16#62#, 16#61#, 16#64#, 16#20#, 16#66#,
+            16#72#, 16#61#, 16#6d#, 16#65#),
+         Name     => "protocol-failure result");
    end Result_Golden_Data;
-
-   -------------------------------------------------------------------------
 
    procedure Result_Rejects_Invalid_Data
    is

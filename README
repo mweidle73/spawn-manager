@@ -26,9 +26,48 @@ launch and sends it through the same internal process representation intended
 for structured argument-vector requests. `Spawn.Pool.Execute` also accepts a
 structured request with an absolute executable, ordered arguments, a complete
 replacement environment, child working directory, independent output streams
-and timeout. It returns the exact exit, signal, timeout or spawn-failure result;
-`Execute_Checked` maps every nonzero result to the compatibility exception.
+and timeout. It returns the exact exit, signal, timeout or spawn-failure
+result; `Execute_Checked` maps every nonzero result to the compatibility
+exception.
 There is no intermediate `spawn_wrapper` process.
+
+Protocol version 1
+------------------
+Every socket exchange is one exact frame. Its 12-byte header contains the
+ASCII magic `SPWN`, big-endian `u16` version `1`, big-endian `u16` message kind
+and big-endian `u32` payload length. Message kinds are `1` for shell requests,
+`2` for exec requests and `3` for results. The length excludes the header.
+
+A string is a big-endian `u32` byte count followed by those bytes. A vector is
+a big-endian `u32` element count followed by its elements. Strings retain their
+exact non-NUL bytes; no text encoding or shell quoting is applied by the
+protocol. Timeouts are two's-complement big-endian `i64` milliseconds, with
+`-1` meaning unlimited.
+
+The two request payloads are:
+
+  shell = string(command), string(directory), i64(timeout)
+
+  exec  = string(executable), u32(argc), string[argc],
+          u32(envc), { string(name), string(value) }[envc],
+          string(directory), stream(stdout), stream(stderr), i64(timeout)
+
+The shell request inherits the manager environment and is normalized to
+`/bin/bash -o pipefail -c command`. The exec request uses an absolute
+executable as implicit `argv[0]`; its transmitted arguments exclude `argv[0]`
+and its environment replaces the complete inherited environment. Version 1
+always connects stdin to `/dev/null`. A stream is one mode byte: `0` selects
+`/dev/null`, while `1` is followed by an absolute path string opened without
+following a final symlink and with truncate semantics; an absent file is
+created with mode `0600`.
+
+A result starts with one kind byte: `0` plus `u32` exit status, `1` plus `u16`
+signal, `2` with no further field for timeout, `3` plus `u16` failure stage,
+`u32` errno and a diagnostic string for a spawn failure, or `4`/`5` plus a
+diagnostic string for request/protocol rejection. The complete field map,
+stage numbering and bounds are maintained beside the protocol constants in
+`src/spawn-protocol.ads`; golden-byte tests independently pin both request
+variants and every result alternative.
 
 `Spawn.Pool.Init` requires the absolute path of the matching `spawn_manager`
 binary. The library never searches `PATH`, and it passes the buffer bound and

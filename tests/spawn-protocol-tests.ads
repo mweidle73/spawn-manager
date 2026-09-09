@@ -49,7 +49,10 @@ package Spawn.Protocol.Tests is
    --  Register protocol tests.
 
    procedure Result_Golden_Data;
-   --  Verify exact version 1 spawn-failure result bytes and decoding.
+   --  Verify exact version 1 bytes for every result alternative.
+
+   procedure Failure_Stage_Golden_Data;
+   --  Verify every version 1 spawn-failure stage number independently.
 
    procedure Result_Rejects_Invalid_Data;
    --  Verify malformed and semantically invalid results are rejected.

@@ -33,21 +33,15 @@ package body Spawn.Protocol is
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
 
-   Magic : constant Ada.Streams.Stream_Element_Array (1 .. 4)
-     := (Character'Pos ('S'),
-         Character'Pos ('P'),
-         Character'Pos ('W'),
-         Character'Pos ('N'));
-
-   Protocol_Version : constant Interfaces.Unsigned_16 := 1;
-
    function To_Integer_64 is new Ada.Unchecked_Conversion
      (Source => Interfaces.Unsigned_64,
       Target => Interfaces.Integer_64);
+   --  Interpret the fixed i64 wire bits as two's-complement signed data.
 
    function To_Unsigned_64 is new Ada.Unchecked_Conversion
      (Source => Interfaces.Integer_64,
       Target => Interfaces.Unsigned_64);
+   --  Preserve an i64 value's two's-complement bits for wire encoding.
 
    procedure Decode_Diagnostic
      (Data   :     Ada.Streams.Stream_Element_Array;
@@ -164,7 +158,7 @@ package body Spawn.Protocol is
    is
       Length : Natural;
    begin
-      if Data'Last - Cursor + 1 < 4 then
+      if Data'Last - Cursor + 1 < U32_Size then
          raise Protocol_Error with "truncated diagnostic length";
       end if;
       declare
@@ -176,7 +170,7 @@ package body Spawn.Protocol is
          end if;
          Length := Natural (Raw_Length);
       end;
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       if Data'Last - Cursor + 1 < Ada.Streams.Stream_Element_Offset (Length)
       then
          raise Protocol_Error with "truncated diagnostic data";
@@ -232,7 +226,7 @@ package body Spawn.Protocol is
         (Value => Ada.Strings.Unbounded.To_String (Decoded.Executable),
          Name  => "executable");
 
-      if Data'Last - Cursor + 1 < 4 then
+      if Data'Last - Cursor + 1 < U32_Size then
          raise Protocol_Error with "truncated argument count";
       end if;
       declare
@@ -245,7 +239,7 @@ package body Spawn.Protocol is
          Validate_Vector_Length
            (Length => Ada.Containers.Count_Type (Count),
             Name   => "argument");
-         Cursor := Cursor + 4;
+         Cursor := Cursor + U32_Size;
          for Index in 1 .. Natural (Count) loop
             declare
                Value : Ada.Strings.Unbounded.Unbounded_String;
@@ -260,7 +254,7 @@ package body Spawn.Protocol is
          end loop;
       end;
 
-      if Data'Last - Cursor + 1 < 4 then
+      if Data'Last - Cursor + 1 < U32_Size then
          raise Protocol_Error with "truncated environment count";
       end if;
       declare
@@ -274,7 +268,7 @@ package body Spawn.Protocol is
          Validate_Vector_Length
            (Length => Ada.Containers.Count_Type (Count),
             Name   => "environment");
-         Cursor := Cursor + 4;
+         Cursor := Cursor + U32_Size;
          for Index in 1 .. Natural (Count) loop
             declare
                Environment_Item : Environment_Entry_Type;
@@ -305,7 +299,7 @@ package body Spawn.Protocol is
         (Data   => Data,
          Cursor => Cursor,
          Stream => Decoded.Standard_Error);
-      if Data'Last - Cursor + 1 < 8 then
+      if Data'Last - Cursor + 1 < I64_Size then
          raise Protocol_Error with "truncated exec timeout";
       end if;
       declare
@@ -317,7 +311,7 @@ package body Spawn.Protocol is
          end if;
          Decoded.Timeout := Timeout_Milliseconds (Raw_Timeout);
       end;
-      Cursor := Cursor + 8;
+      Cursor := Cursor + I64_Size;
       if Cursor /= Data'Last + 1 then
          raise Protocol_Error with "trailing exec payload bytes";
       end if;
@@ -337,17 +331,25 @@ package body Spawn.Protocol is
       if Data'Length /= Header_Size then
          raise Protocol_Error with "invalid header length";
       end if;
-      if Data (First .. First + 3) /= Magic then
+      if Data
+        (First + Header_Magic_Offset
+         .. First + Header_Magic_Offset + Magic_Size - 1) /= Protocol_Magic
+      then
          raise Protocol_Error with "invalid protocol magic";
       end if;
-      if Decode_U16 (Data => Data, First => First + 4) /= Protocol_Version
+      if Decode_U16
+        (Data  => Data,
+         First => First + Header_Version_Offset) /= Protocol_Version
       then
          raise Protocol_Error with "unsupported protocol version";
       end if;
       Header.Kind := Kind_From_Wire
-        (Value => Decode_U16 (Data => Data, First => First + 6));
+        (Value => Decode_U16
+           (Data  => Data,
+            First => First + Header_Kind_Offset));
       Header.Payload_Length := Decode_U32
-        (Data => Data, First => First + 8);
+        (Data  => Data,
+         First => First + Header_Length_Offset);
       declare
          Ignored : constant Positive := Frame_Length
            (Payload_Length => Header.Payload_Length,
@@ -403,36 +405,36 @@ package body Spawn.Protocol is
       then
          raise Protocol_Error with "result frame length mismatch";
       end if;
-      if Data'Last - Cursor + 1 < 1 then
+      if Data'Last - Cursor + 1 < Result_Kind_Size then
          raise Protocol_Error with "result kind is missing";
       end if;
       if Natural (Data (Cursor)) > Result_Kind'Pos (Result_Kind'Last) then
          raise Protocol_Error with "unknown result kind";
       end if;
       Decoded_Kind := Result_Kind'Val (Natural (Data (Cursor)));
-      Cursor := Cursor + 1;
+      Cursor := Cursor + Result_Kind_Size;
 
       case Decoded_Kind is
          when Exited =>
-            if Data'Last - Cursor + 1 < 4 then
+            if Data'Last - Cursor + 1 < U32_Size then
                raise Protocol_Error with "truncated exit status";
             end if;
             Result :=
               (Kind        => Exited,
                Exit_Status => Decode_U32 (Data => Data, First => Cursor));
-            Cursor := Cursor + 4;
+            Cursor := Cursor + U32_Size;
          when Signaled =>
-            if Data'Last - Cursor + 1 < 2 then
+            if Data'Last - Cursor + 1 < U16_Size then
                raise Protocol_Error with "truncated signal number";
             end if;
             Result :=
               (Kind          => Signaled,
                Signal_Number => Decode_U16 (Data => Data, First => Cursor));
-            Cursor := Cursor + 2;
+            Cursor := Cursor + U16_Size;
          when Timed_Out =>
             Result := (Kind => Timed_Out);
          when Spawn_Failed =>
-            if Data'Last - Cursor + 1 < 6 then
+            if Data'Last - Cursor + 1 < U16_Size + U32_Size then
                raise Protocol_Error with "truncated spawn failure";
             end if;
             declare
@@ -445,12 +447,12 @@ package body Spawn.Protocol is
                then
                   raise Protocol_Error with "unknown failure stage";
                end if;
-               Cursor := Cursor + 2;
+               Cursor := Cursor + U16_Size;
                declare
                   Error_Number : constant Interfaces.Unsigned_32
                     := Decode_U32 (Data => Data, First => Cursor);
                begin
-                  Cursor := Cursor + 4;
+                  Cursor := Cursor + U32_Size;
                   Decode_Diagnostic
                     (Data   => Data,
                      Cursor => Cursor,
@@ -528,11 +530,11 @@ package body Spawn.Protocol is
         (Data   => Data,
          Cursor => Cursor,
          Value  => Request.Directory);
-      if Data'Last - Cursor + 1 < 8 then
+      if Data'Last - Cursor + 1 < I64_Size then
          raise Protocol_Error with "truncated shell timeout";
       end if;
       Raw_Timeout := Decode_I64 (Data => Data, First => Cursor);
-      Cursor := Cursor + 8;
+      Cursor := Cursor + I64_Size;
       if Raw_Timeout < -1 then
          raise Request_Error with "invalid shell timeout";
       end if;
@@ -550,15 +552,15 @@ package body Spawn.Protocol is
       Stream : out Stream_Specification_Type)
    is
    begin
-      if Data'Last - Cursor + 1 < 1 then
+      if Data'Last - Cursor + 1 < Stream_Mode_Size then
          raise Protocol_Error with "stream mode is missing";
       end if;
       case Data (Cursor) is
          when 0 =>
             Stream := (Mode => Null_Stream);
-            Cursor := Cursor + 1;
+            Cursor := Cursor + Stream_Mode_Size;
          when 1 =>
-            Cursor := Cursor + 1;
+            Cursor := Cursor + Stream_Mode_Size;
             declare
                Path : Ada.Strings.Unbounded.Unbounded_String;
             begin
@@ -585,7 +587,7 @@ package body Spawn.Protocol is
    is
       Length : Natural;
    begin
-      if Data'Last - Cursor + 1 < 4 then
+      if Data'Last - Cursor + 1 < U32_Size then
          raise Protocol_Error with "truncated string length";
       end if;
       declare
@@ -597,7 +599,7 @@ package body Spawn.Protocol is
          end if;
          Length := Natural (Raw_Length);
       end;
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       if Data'Last - Cursor + 1 < Ada.Streams.Stream_Element_Offset (Length)
       then
          raise Protocol_Error with "truncated string data";
@@ -663,7 +665,7 @@ package body Spawn.Protocol is
             raise Protocol_Error with "diagnostic contains NUL";
          end if;
       end loop;
-      return 4 + Source'Length;
+      return U32_Size + Source'Length;
    end Diagnostic_Field_Length;
 
    -------------------------------------------------------------------------
@@ -681,7 +683,7 @@ package body Spawn.Protocol is
         (Value => Interfaces.Unsigned_32 (Source'Length),
          Data  => Data,
          First => Cursor);
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       for Item of Source loop
          Data (Cursor) := Ada.Streams.Stream_Element (Character'Pos (Item));
          Cursor := Cursor + 1;
@@ -718,7 +720,7 @@ package body Spawn.Protocol is
         (Value => Interfaces.Unsigned_32 (Request.Arguments.Length),
          Data  => Data,
          First => Cursor);
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       for Argument of Request.Arguments loop
          Encode_String
            (Value  => Ada.Strings.Unbounded.To_Unbounded_String (Argument),
@@ -730,7 +732,7 @@ package body Spawn.Protocol is
         (Value => Interfaces.Unsigned_32 (Request.Environment.Length),
          Data  => Data,
          First => Cursor);
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       for Environment_Item of Request.Environment loop
          Encode_String
            (Value  => Environment_Item.Name,
@@ -755,7 +757,7 @@ package body Spawn.Protocol is
          Data   => Data,
          Cursor => Cursor);
       Encode_I64 (Value => Request.Timeout, Data => Data, First => Cursor);
-      Cursor := Cursor + 8;
+      Cursor := Cursor + I64_Size;
       if Cursor /= Data'Last + 1 then
          raise Program_Error with "exec frame length calculation differs";
       end if;
@@ -780,19 +782,21 @@ package body Spawn.Protocol is
       if Data'Length < Header_Size then
          raise Protocol_Error with "header buffer too small";
       end if;
-      Data (First .. First + 3) := Magic;
+      Data
+        (First + Header_Magic_Offset
+         .. First + Header_Magic_Offset + Magic_Size - 1) := Protocol_Magic;
       Encode_U16
         (Value => Protocol_Version,
          Data  => Data,
-         First => First + 4);
+         First => First + Header_Version_Offset);
       Encode_U16
         (Value => Kind_To_Wire (Kind => Header.Kind),
          Data  => Data,
-         First => First + 6);
+         First => First + Header_Kind_Offset);
       Encode_U32
         (Value => Header.Payload_Length,
          Data  => Data,
-         First => First + 8);
+         First => First + Header_Length_Offset);
    end Encode_Header;
 
    -------------------------------------------------------------------------
@@ -837,7 +841,7 @@ package body Spawn.Protocol is
          Data   => Data);
       Data (Cursor) := Ada.Streams.Stream_Element
         (Result_Kind'Pos (Result.Kind));
-      Cursor := Cursor + 1;
+      Cursor := Cursor + Result_Kind_Size;
 
       case Result.Kind is
          when Exited =>
@@ -845,13 +849,13 @@ package body Spawn.Protocol is
               (Value => Result.Exit_Status,
                Data  => Data,
                First => Cursor);
-            Cursor := Cursor + 4;
+            Cursor := Cursor + U32_Size;
          when Signaled =>
             Encode_U16
               (Value => Result.Signal_Number,
                Data  => Data,
                First => Cursor);
-            Cursor := Cursor + 2;
+            Cursor := Cursor + U16_Size;
          when Timed_Out =>
             null;
          when Spawn_Failed =>
@@ -860,12 +864,12 @@ package body Spawn.Protocol is
                  (Failure_Stage'Pos (Result.Failure.Stage)),
                Data  => Data,
                First => Cursor);
-            Cursor := Cursor + 2;
+            Cursor := Cursor + U16_Size;
             Encode_U32
               (Value => Result.Failure.Error_Number,
                Data  => Data,
                First => Cursor);
-            Cursor := Cursor + 4;
+            Cursor := Cursor + U32_Size;
             Encode_Diagnostic
               (Value  => Result.Failure.Diagnostic,
                Data   => Data,
@@ -911,7 +915,7 @@ package body Spawn.Protocol is
          Data   => Data,
          Cursor => Cursor);
       Encode_I64 (Value => Request.Timeout, Data => Data, First => Cursor);
-      Cursor := Cursor + 8;
+      Cursor := Cursor + I64_Size;
       if Cursor /= Data'Last + 1 then
          raise Program_Error with "shell frame length calculation differs";
       end if;
@@ -929,7 +933,7 @@ package body Spawn.Protocol is
    begin
       Data (Cursor) := Ada.Streams.Stream_Element
         (Stream_Mode'Pos (Stream.Mode));
-      Cursor := Cursor + 1;
+      Cursor := Cursor + Stream_Mode_Size;
       if Stream.Mode = Truncate_File then
          Encode_String
            (Value  => Stream.Path,
@@ -953,7 +957,7 @@ package body Spawn.Protocol is
         (Value => Interfaces.Unsigned_32 (Source'Length),
          Data  => Data,
          First => Cursor);
-      Cursor := Cursor + 4;
+      Cursor := Cursor + U32_Size;
       for Item of Source loop
          Data (Cursor) := Ada.Streams.Stream_Element
            (Character'Pos (Item));
@@ -999,7 +1003,7 @@ package body Spawn.Protocol is
       Active_Bound : Positive)
       return Positive
    is
-      Payload_Length : Natural := 8;
+      Payload_Length : Natural := I64_Size;
    begin
       Validate_Vector_Length
         (Length => Request.Arguments.Length,
@@ -1014,13 +1018,13 @@ package body Spawn.Protocol is
         (Value => Ada.Strings.Unbounded.To_String (Request.Executable),
          Name  => "executable");
 
-      Payload_Length := Payload_Length + 4;
+      Payload_Length := Payload_Length + U32_Size;
       for Argument of Request.Arguments loop
          Payload_Length := Payload_Length + String_Field_Length
            (Value => Ada.Strings.Unbounded.To_Unbounded_String (Argument));
       end loop;
 
-      Payload_Length := Payload_Length + 4;
+      Payload_Length := Payload_Length + U32_Size;
       for Environment_Item of Request.Environment loop
          Payload_Length := Payload_Length
            + String_Field_Length (Value => Environment_Item.Name)
@@ -1092,17 +1096,17 @@ package body Spawn.Protocol is
       Active_Bound : Positive)
       return Positive
    is
-      Payload_Length : Natural := 1;
+      Payload_Length : Natural := Result_Kind_Size;
    begin
       case Result.Kind is
          when Exited =>
-            Payload_Length := Payload_Length + 4;
+            Payload_Length := Payload_Length + U32_Size;
          when Signaled =>
-            Payload_Length := Payload_Length + 2;
+            Payload_Length := Payload_Length + U16_Size;
          when Timed_Out =>
             null;
          when Spawn_Failed =>
-            Payload_Length := Payload_Length + 6
+            Payload_Length := Payload_Length + U16_Size + U32_Size
               + Diagnostic_Field_Length (Result.Failure.Diagnostic);
          when Request_Rejected | Protocol_Failed =>
             Payload_Length := Payload_Length
@@ -1120,7 +1124,7 @@ package body Spawn.Protocol is
       Active_Bound : Positive)
       return Positive
    is
-      Payload_Length : Natural := 8;
+      Payload_Length : Natural := I64_Size;
    begin
       Payload_Length := Payload_Length
         + String_Field_Length (Value => Request.Command);
@@ -1139,7 +1143,7 @@ package body Spawn.Protocol is
    begin
       case Stream.Mode is
          when Null_Stream =>
-            return 1;
+            return Stream_Mode_Size;
          when Truncate_File =>
             declare
                Length : constant Positive := String_Field_Length
@@ -1148,7 +1152,7 @@ package body Spawn.Protocol is
                Validate_Absolute_Path
                  (Value => Ada.Strings.Unbounded.To_String (Stream.Path),
                   Name  => "stream");
-               return 1 + Length;
+               return Stream_Mode_Size + Length;
             end;
       end case;
    end Stream_Field_Length;
@@ -1169,7 +1173,7 @@ package body Spawn.Protocol is
             raise Request_Error with "string contains NUL";
          end if;
       end loop;
-      return 4 + Source'Length;
+      return U32_Size + Source'Length;
    end String_Field_Length;
 
    -------------------------------------------------------------------------

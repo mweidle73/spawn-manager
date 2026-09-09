@@ -29,13 +29,97 @@ with Interfaces;
 
 package Spawn.Protocol is
 
-   Header_Size            : constant := 12;
-   Maximum_Frame_Size     : constant := 128 * 1024;
-   Maximum_String_Size    : constant := 64 * 1024;
-   Maximum_Vector_Length  : constant := 1024;
+   --  Version 1 wire format
+   --
+   --  All offsets below are zero-based byte offsets. Integers are unsigned
+   --  big-endian unless marked i64. Lengths count payload bytes, not Ada
+   --  characters, and strings contain their bytes verbatim. NUL is forbidden.
+   --
+   --    Common frame header (12 bytes)
+   --
+   --      0  u8[4]  magic "SPWN"
+   --      4  u16    protocol version, fixed value 1
+   --      6  u16    message kind: 1 shell, 2 exec, 3 result
+   --      8  u32    payload length, excluding this header
+   --
+   --    Reusable fields
+   --
+   --      string  := u32 byte_length, u8[byte_length]
+   --      vector  := u32 element_count, element[element_count]
+   --      stream  := u8 mode, where 0 is /dev/null and 1 is followed by
+   --                 one absolute-path string opened with truncate semantics
+   --      timeout := i64 two's-complement milliseconds; -1 means unlimited
+   --
+   --    Shell request payload (message kind 1)
+   --
+   --      string command
+   --      string working_directory
+   --      i64    timeout
+   --
+   --    The shell request inherits the manager environment. The manager maps
+   --    it to absolute `/bin/bash -o pipefail -c command`; stdin, stdout and
+   --    stderr use /dev/null unless redirection is part of command itself.
+   --
+   --    Exec request payload (message kind 2)
+   --
+   --      string executable                 absolute; becomes argv[0]
+   --      u32    argument_count
+   --      string argument[argument_count]   excludes argv[0]
+   --      u32    environment_count
+   --      repeat environment_count times:
+   --         string environment_name
+   --         string environment_value
+   --      string working_directory
+   --      stream stdout
+   --      stream stderr
+   --      i64    timeout
+   --
+   --    Exec requests replace the complete environment; a zero count means
+   --    an empty environment. Standard input is always /dev/null in version 1.
+   --
+   --    Result payload (message kind 3)
+   --
+   --      u8 result_kind, followed by exactly one alternative:
+   --        0 exited:           u32 exit_status
+   --        1 signaled:         u16 signal_number
+   --        2 timed_out:        no additional bytes
+   --        3 spawn_failed:     u16 stage, u32 errno, diagnostic
+   --        4 request_rejected: diagnostic
+   --        5 protocol_failed:  diagnostic
+   --
+   --      diagnostic := u32 byte_length, u8[byte_length]
+   --
+   --    Spawn-failure stages use values 0 through 17 in Failure_Stage order.
+   --    Every frame is exact: trailing bytes, unknown values, an inconsistent
+   --    payload length or a field outside the limits below are rejected.
+
+   Magic_Size              : constant := 4;
+   U16_Size                : constant := 2;
+   U32_Size                : constant := 4;
+   I64_Size                : constant := 8;
+   Stream_Mode_Size        : constant := 1;
+   Result_Kind_Size        : constant := 1;
+
+   Header_Magic_Offset     : constant := 0;
+   Header_Version_Offset   : constant := Header_Magic_Offset + Magic_Size;
+   Header_Kind_Offset      : constant := Header_Version_Offset + U16_Size;
+   Header_Length_Offset    : constant := Header_Kind_Offset + U16_Size;
+   Header_Size             : constant := Header_Length_Offset + U32_Size;
+
+   Protocol_Magic : constant Ada.Streams.Stream_Element_Array (1 .. Magic_Size)
+     := (Character'Pos ('S'),
+         Character'Pos ('P'),
+         Character'Pos ('W'),
+         Character'Pos ('N'));
+   Protocol_Version        : constant Interfaces.Unsigned_16 := 1;
+
+   Maximum_Frame_Size      : constant := 128 * 1024;
+   Maximum_String_Size     : constant := 64 * 1024;
+   Maximum_Vector_Length   : constant := 1024;
    Maximum_Diagnostic_Size : constant := 4 * 1024;
 
    type Message_Kind is (Shell_Request, Exec_Request, Result_Message);
+   --  Header values are assigned explicitly as 1, 2 and 3 by the encoder.
 
    type Header_Type is record
       Kind           : Message_Kind;
@@ -65,6 +149,7 @@ package Spawn.Protocol is
       Element_Type => Environment_Entry_Type);
 
    type Stream_Mode is (Null_Stream, Truncate_File);
+   --  Wire values are the zero-based positions fixed in the format above.
 
    type Stream_Specification_Type
      (Mode : Stream_Mode := Null_Stream)
@@ -94,6 +179,7 @@ package Spawn.Protocol is
       Spawn_Failed,
       Request_Rejected,
       Protocol_Failed);
+   --  Wire values are the zero-based positions fixed in the format above.
 
    type Failure_Stage is
      (No_Failure,
@@ -114,6 +200,7 @@ package Spawn.Protocol is
       Exec_Target,
       Wait_Child,
       Terminate_Group);
+   --  Wire values 0 through 17 follow this fixed order.
 
    type Failure_Details is record
       Stage        : Failure_Stage := No_Failure;
