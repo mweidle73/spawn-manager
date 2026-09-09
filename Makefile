@@ -46,6 +46,7 @@ tests: $(POSIX_TEST) spawn_tests spawn_manager
 	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
 	@$(OBJDIR)/test_runner
 	@tests/check_adaflags.sh "$(CURDIR)"
+	@tests/check_install.sh "$(CURDIR)"
 
 spawn_manager: $(VERSION_SPEC)
 	@gnatmake -P$@ -p -XBUILD=$(BUILD_TYPE)
