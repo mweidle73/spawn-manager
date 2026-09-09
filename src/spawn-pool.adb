@@ -147,7 +147,13 @@ package body Spawn.Pool is
       Request               : Ada.Streams.Stream_Element_Array;
       First_Byte_Timeout_MS : Protocol.Timeout_Milliseconds)
       return Protocol.Result_Type;
-   --  Exchange one exact frame and release or poison Lease exactly once.
+   --  Exchange one exact frame, poisoning Lease on transport failure.
+
+   procedure Reset_And_Release
+     (Lease     : in out Lease_Guard;
+      Pid_Reset : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor));
+   --  Reset the manager while Lease is exclusive, then make it reusable.
 
    -------------------------------------------------------------------------
 
@@ -344,6 +350,8 @@ package body Spawn.Pool is
    function Execute
      (Request   : Protocol.Exec_Request_Type;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
       return Protocol.Result_Type
    is
@@ -355,6 +363,7 @@ package body Spawn.Pool is
          Data : Ada.Streams.Stream_Element_Array
            (1 .. Ada.Streams.Stream_Element_Offset (Length));
          Lease : Lease_Guard;
+         Result : Protocol.Result_Type;
       begin
          Protocol.Encode_Exec_Request
            (Request      => Request,
@@ -365,7 +374,7 @@ package body Spawn.Pool is
             & To_String (Lease.Container.Address));
          Pid_Setup (Lease.Container.Pid);
          begin
-            return Send_Receive
+            Result := Send_Receive
               (Lease                 => Lease,
                Request               => Data,
                First_Byte_Timeout_MS =>
@@ -381,6 +390,8 @@ package body Spawn.Pool is
                   Diagnostic => To_Unbounded_String
                     ("manager transport failed"));
          end;
+         Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
+         return Result;
       end;
    exception
       when Spawn.Protocol.Protocol_Error
@@ -397,6 +408,8 @@ package body Spawn.Pool is
       Directory : String  := Ada.Directories.Current_Directory;
       Timeout   : Integer := -1;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
    is
       Request : constant Protocol.Shell_Request_Type
@@ -441,6 +454,8 @@ package body Spawn.Pool is
               "Manager transport failed for command: '" & Command & "'";
       end;
 
+      Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
+
       if Result.Kind /= Protocol.Exited or else Result.Exit_Status /= 0 then
          raise Command_Failed with "Command failed: '" & Command & "'";
       end if;
@@ -451,11 +466,14 @@ package body Spawn.Pool is
    procedure Execute_Checked
      (Request   : Protocol.Exec_Request_Type;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
    is
       Result : constant Protocol.Result_Type := Execute
         (Request   => Request,
-         Pid_Setup => Pid_Setup);
+         Pid_Setup => Pid_Setup,
+         Pid_Reset => Pid_Reset);
    begin
       if Result.Kind /= Protocol.Exited or else Result.Exit_Status /= 0 then
          raise Command_Failed with "Structured command failed ["
@@ -699,6 +717,20 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
+   procedure Reset_And_Release
+     (Lease     : in out Lease_Guard;
+      Pid_Reset : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor))
+   is
+   begin
+      Pid_Reset (Lease.Container.Pid);
+      Lease_Guards.Release (Lease);
+      L (Msg => "Socket " & To_String (Lease.Container.Address)
+         & " released");
+   end Reset_And_Release;
+
+   -------------------------------------------------------------------------
+
    function Result_Timeout
      (Child_Timeout : Protocol.Timeout_Milliseconds)
       return Protocol.Timeout_Milliseconds
@@ -746,9 +778,6 @@ package body Spawn.Pool is
             Active_Bound => Positive (Cmd_Buffer_Size),
             Result       => Result);
       end;
-      Lease_Guards.Release (Lease);
-      L (Msg => "Socket " & To_String (Lease.Container.Address)
-         & " released");
       return Result;
 
    exception

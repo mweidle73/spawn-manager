@@ -78,6 +78,9 @@ package Spawn.Pool.Tests is
    procedure Parallel_Execution;
    --  Verify parallel command execution.
 
+   procedure Pid_Reset_Precedes_Release;
+   --  Verify manager reset runs while its pool lease remains exclusive.
+
    procedure Pid_Setup_Structured_Target;
    --  Verify structured Pid_Setup receives the long-lived manager PID.
 

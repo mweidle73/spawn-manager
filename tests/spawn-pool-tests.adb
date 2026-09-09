@@ -1111,6 +1111,9 @@ package body Spawn.Pool.Tests is
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");
       T.Add_Test_Routine
+        (Routine => Pid_Reset_Precedes_Release'Access,
+         Name    => "Reset manager before releasing lease");
+      T.Add_Test_Routine
         (Routine => Pid_Setup_Structured_Target'Access,
          Name    => "Preserve structured manager PID callback");
       T.Add_Test_Routine
@@ -1301,6 +1304,64 @@ package body Spawn.Pool.Tests is
          end loop;
          raise;
    end Parallel_Execution;
+
+   -------------------------------------------------------------------------
+
+   procedure Pid_Reset_Precedes_Release
+   is
+      Reset_Count : Natural := 0;
+
+      procedure Check_Lease (Pid : GNAT.Expect.Process_Descriptor);
+      --  Verify a nested request cannot acquire the manager being reset.
+
+      procedure Check_Lease (Pid : GNAT.Expect.Process_Descriptor)
+      is
+         pragma Unreferenced (Pid);
+      begin
+         Reset_Count := Reset_Count + 1;
+         begin
+            Spawn.Pool.Execute (Command => "/bin/true");
+            Fail (Message => "manager lease was released before reset");
+         exception
+            when Spawn.Pool.Pool_Error => null;
+         end;
+      end Check_Lease;
+
+      Request : Spawn.Protocol.Exec_Request_Type;
+      Result  : Spawn.Protocol.Result_Type;
+   begin
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+
+      Request.Executable := To_Unbounded_String ("/bin/true");
+      Request.Directory := To_Unbounded_String
+        (Ada.Directories.Current_Directory);
+      Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
+      Request.Timeout := -1;
+      Result := Spawn.Pool.Execute
+        (Request   => Request,
+         Pid_Reset => Check_Lease'Access);
+      Assert
+        (Condition => Result.Kind = Spawn.Protocol.Exited
+           and then Result.Exit_Status = 0,
+         Message   => "structured reset request failed");
+
+      Spawn.Pool.Execute
+        (Command   => "/bin/true",
+         Pid_Reset => Check_Lease'Access);
+      Assert
+        (Condition => Reset_Count = 2,
+         Message   => "manager reset callback count changed");
+
+      --  The manager becomes reusable immediately after reset finishes.
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         raise;
+   end Pid_Reset_Precedes_Release;
 
    -------------------------------------------------------------------------
 

@@ -71,24 +71,32 @@ package Spawn.Pool is
       Directory : String  := Ada.Directories.Current_Directory;
       Timeout   : Integer := -1;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
    --  Execute Command as `/bin/bash -o pipefail -c` in Directory. Timeout is
    --  measured in milliseconds and -1 means unlimited. Pid_Setup receives the
-   --  long-lived manager before it forks the shell. Raise Command_Failed for
-   --  every result other than exit status zero.
+   --  long-lived manager before it forks the shell. Pid_Reset runs after a
+   --  valid result and before that manager becomes reusable. Raise
+   --  Command_Failed for every result other than exit status zero.
 
    function Execute
      (Request   : Spawn.Protocol.Exec_Request_Type;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
       return Spawn.Protocol.Result_Type;
    --  Execute one structured request and return its exact termination result.
    --  Pid_Setup receives the selected long-lived manager before it forks the
-   --  request child; concurrent calls acquire independent manager leases.
+   --  request child. Pid_Reset runs while the same manager lease is still
+   --  exclusive; concurrent calls acquire independent manager leases.
 
    procedure Execute_Checked
      (Request   : Spawn.Protocol.Exec_Request_Type;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
    --  Execute one structured request and raise unless it exits with status 0.
 
