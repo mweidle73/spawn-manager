@@ -7,6 +7,7 @@ project Spawn_Tests is
    Build : Build_Type := external ("BUILD", "tests");
 
    for Main use ("test_runner.adb");
+   for Languages use ("Ada", "C");
    for Source_Dirs use Spawn_Common.Source_Dirs & "tests";
 
    Compiler_Switches := Spawn_Common.Compiler_Switches & "-gnata" & "-gnatwal";
@@ -26,6 +27,7 @@ project Spawn_Tests is
 
    package Compiler is
       for Default_Switches ("ada") use Compiler_Switches;
+      for Default_Switches ("c") use ("-Wall", "-Werror");
    end Compiler;
 
    package Linker is

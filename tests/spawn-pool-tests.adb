@@ -35,6 +35,8 @@ with Ada.Real_Time;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Interfaces.C;
+
 with Anet.OS;
 with Anet.Util;
 
@@ -43,6 +45,19 @@ with GNAT.Expect;
 package body Spawn.Pool.Tests is
 
    use Ahven;
+   use type Interfaces.C.int;
+
+   function Block_Test_Signal return Interfaces.C.int
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_block_signal";
+   --  Save the caller mask and block one test signal before manager startup.
+
+   function Restore_Test_Signal_Mask return Interfaces.C.int
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_restore_signal_mask";
+   --  Restore the signal mask saved by Block_Test_Signal.
 
    task type Executor is
       entry Call;
@@ -582,6 +597,37 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Execute_Signal_Mask
+   is
+      Mask_Saved : Boolean := False;
+   begin
+      Assert
+        (Condition => Block_Test_Signal = 0,
+         Message   => "unable to prepare inherited signal mask");
+      Mask_Saved := True;
+
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Execute
+        (Command => "grep -Eq '^SigBlk:[[:space:]]+0+$' "
+         & "/proc/self/status");
+      Spawn.Pool.Cleanup;
+
+      Assert
+        (Condition => Restore_Test_Signal_Mask = 0,
+         Message   => "unable to restore inherited signal mask");
+      Mask_Saved := False;
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         if Mask_Saved then
+            Mask_Saved := Restore_Test_Signal_Mask /= 0;
+         end if;
+         raise;
+   end Execute_Signal_Mask;
+
+   -------------------------------------------------------------------------
+
    procedure Execute_Working_Directories
    is
       use Ada.Directories;
@@ -678,6 +724,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Execute_Shell_Syntax'Access,
          Name    => "Preserve shell syntax and pipefail");
+      T.Add_Test_Routine
+        (Routine => Execute_Signal_Mask'Access,
+         Name    => "Preserve empty child signal mask");
       T.Add_Test_Routine
         (Routine => Execute_Working_Directories'Access,
          Name    => "Preserve per-request working directories");

@@ -57,6 +57,9 @@ package Spawn.Pool.Tests is
    procedure Execute_Shell_Syntax;
    --  Verify Bash evaluation, pipefail and reuse after command failure.
 
+   procedure Execute_Signal_Mask;
+   --  Verify the shell child starts without inherited blocked signals.
+
    procedure Execute_Working_Directories;
    --  Verify per-request directories and reuse after a rejected directory.
 
