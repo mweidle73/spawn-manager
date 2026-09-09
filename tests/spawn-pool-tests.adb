@@ -740,6 +740,9 @@ package body Spawn.Pool.Tests is
         (Routine => Pool_Depleted'Access,
          Name    => "Pool depleted");
       T.Add_Test_Routine
+        (Routine => Relative_Socket_Transport'Access,
+         Name    => "Preserve short relative socket transport");
+      T.Add_Test_Routine
         (Routine => Command_Timeout'Access,
          Name    => "Command timeout");
       T.Add_Test_Routine
@@ -1006,6 +1009,48 @@ package body Spawn.Pool.Tests is
    begin
       raise Anet.OS.IO_Error with "injected delete failure";
    end Raise_Delete_Error;
+
+   -------------------------------------------------------------------------
+
+   procedure Relative_Socket_Transport
+   is
+      use Ada.Directories;
+
+      Directory : constant String := "obj/deep-"
+        & Anet.Util.Random_String (Len => 68);
+      Address_Suffix : constant String
+        := "/.sp-123456789012/m-12345678";
+      Relative_Address : constant String := Directory & Address_Suffix;
+      Initialized : Boolean := False;
+   begin
+      Create_Directory (New_Directory => Directory);
+      Assert
+        (Condition => Anet.Sockets.Unix.Is_Valid
+           (Path => Relative_Address),
+         Message => "relative socket fixture exceeds the transport limit");
+      Assert
+        (Condition => not Anet.Sockets.Unix.Is_Valid
+           (Path => Full_Name (Name => Directory) & Address_Suffix),
+         Message => "absolute socket fixture does not exceed the limit");
+
+      Spawn.Pool.Init (Socket_Dir => Directory,
+                       Log        => Ada.Text_IO.Put_Line'Access);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+      Delete_Directory (Directory => Directory);
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         if Exists (Name => Directory) then
+            Delete_Tree (Directory => Directory);
+         end if;
+         raise;
+   end Relative_Socket_Transport;
 
    -------------------------------------------------------------------------
 

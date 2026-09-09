@@ -72,6 +72,9 @@ package Spawn.Pool.Tests is
    procedure Pool_Depleted;
    --  Verify exception handling if pool is depleted.
 
+   procedure Relative_Socket_Transport;
+   --  Verify a short relative socket survives an overlong absolute spelling.
+
    procedure Command_Timeout;
    --  Test command timeout feature.
 
