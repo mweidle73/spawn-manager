@@ -38,6 +38,8 @@ with Ada.Strings.Unbounded;
 with Anet.OS;
 with Anet.Util;
 
+with GNAT.Expect;
+
 package body Spawn.Pool.Tests is
 
    use Ahven;
@@ -580,6 +582,77 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Execute_Working_Directories
+   is
+      use Ada.Directories;
+
+      Root : constant String := "obj/directory-"
+        & Anet.Util.Random_String (Len => 8);
+      First_Directory  : constant String := Root & "/first";
+      Second_Directory : constant String := Root & "/second";
+      Missing_Directory : constant String := Root & "/missing";
+      Output_Path : constant String := Current_Directory & "/" & Root
+        & "/pwd.out";
+
+      procedure Assert_Directory (Expected : String);
+      --  Execute pwd in Expected and verify the child-visible directory.
+
+      procedure Assert_Directory (Expected : String)
+      is
+         Output : Ada.Text_IO.File_Type;
+      begin
+         Spawn.Pool.Execute
+           (Command   => "pwd > " & Output_Path,
+            Directory => Expected);
+         Ada.Text_IO.Open
+           (File => Output,
+            Mode => Ada.Text_IO.In_File,
+            Name => Output_Path,
+            Form => "shared=no");
+         Assert
+           (Condition => Ada.Text_IO.Get_Line (File => Output) = Expected,
+            Message   => "child working directory changed");
+         Ada.Text_IO.Close (File => Output);
+
+      exception
+         when others =>
+            if Ada.Text_IO.Is_Open (File => Output) then
+               Ada.Text_IO.Close (File => Output);
+            end if;
+            raise;
+      end Assert_Directory;
+   begin
+      Create_Path (New_Directory => First_Directory);
+      Create_Path (New_Directory => Second_Directory);
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+
+      Assert_Directory (Expected => Full_Name (First_Directory));
+
+      begin
+         Spawn.Pool.Execute
+           (Command   => "/bin/true",
+            Directory => Missing_Directory);
+         Fail (Message => "Missing working directory accepted");
+
+      exception
+         when Spawn.Pool.Command_Failed => null;
+      end;
+
+      Assert_Directory (Expected => Full_Name (Second_Directory));
+      Spawn.Pool.Cleanup;
+      Delete_Tree (Directory => Root);
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         if Exists (Name => Root) then
+            Delete_Tree (Directory => Root);
+         end if;
+         raise;
+   end Execute_Working_Directories;
+
+   -------------------------------------------------------------------------
+
    procedure Initialize (T : in out Testcase)
    is
    begin
@@ -606,8 +679,14 @@ package body Spawn.Pool.Tests is
         (Routine => Execute_Shell_Syntax'Access,
          Name    => "Preserve shell syntax and pipefail");
       T.Add_Test_Routine
+        (Routine => Execute_Working_Directories'Access,
+         Name    => "Preserve per-request working directories");
+      T.Add_Test_Routine
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");
+      T.Add_Test_Routine
+        (Routine => Pid_Setup_Target'Access,
+         Name    => "Preserve manager PID callback");
       T.Add_Test_Routine
         (Routine => Pool_Depleted'Access,
          Name    => "Pool depleted");
@@ -770,6 +849,64 @@ package body Spawn.Pool.Tests is
          end loop;
          raise;
    end Parallel_Execution;
+
+   -------------------------------------------------------------------------
+
+   procedure Pid_Setup_Target
+   is
+      use Ada.Directories;
+
+      Manager_PID : Integer := -1;
+      Output_Path : constant String := Current_Directory
+        & "/obj/pid-setup-" & Anet.Util.Random_String (Len => 8)
+        & ".out";
+
+      procedure Capture_Manager
+        (Descriptor : GNAT.Expect.Process_Descriptor);
+      --  Record the process selected by the public compatibility callback.
+
+      procedure Capture_Manager
+        (Descriptor : GNAT.Expect.Process_Descriptor)
+      is
+      begin
+         Manager_PID := Integer
+           (GNAT.Expect.Get_Pid (Descriptor => Descriptor));
+      end Capture_Manager;
+   begin
+      Spawn.Pool.Init (Log => Ada.Text_IO.Put_Line'Access);
+      Spawn.Pool.Execute
+        (Command   => "printf '%s\n' ""$PPID"" > " & Output_Path,
+         Pid_Setup => Capture_Manager'Access);
+
+      Assert (Condition => Manager_PID > 0,
+              Message   => "pid-setup callback was not called");
+
+      declare
+         Output : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open
+           (File => Output,
+            Mode => Ada.Text_IO.In_File,
+            Name => Output_Path,
+            Form => "shared=no");
+         Assert
+           (Condition => Integer'Value
+              (Ada.Text_IO.Get_Line (File => Output)) = Manager_PID,
+            Message   => "pid-setup callback did not receive manager PID");
+         Ada.Text_IO.Close (File => Output);
+      end;
+
+      Spawn.Pool.Cleanup;
+      Delete_File (Name => Output_Path);
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         if Exists (Name => Output_Path) then
+            Delete_File (Name => Output_Path);
+         end if;
+         raise;
+   end Pid_Setup_Target;
 
    -------------------------------------------------------------------------
 
