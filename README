@@ -113,6 +113,13 @@ following command:
 
 All tests should be marked with *PASS* behind the test name.
 
+`make perf` keeps the legacy shell baselines and reports structured execution
+for a trivial command, representative argument and environment vectors,
+independent small and larger output files, manager startup and cleanup, and
+parallel throughput with one, two, four and eight managers. Its wall-clock
+figures are evidence for paired runs on the same host, not portable absolute
+limits.
+
 Installation
 ------------
 To install the spawn manager on your system, type the following:

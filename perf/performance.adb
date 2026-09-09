@@ -30,6 +30,8 @@
 with Ada.Containers.Generic_Array_Sort;
 with Ada.Directories;
 with Ada.Real_Time;
+with Ada.Strings;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Interfaces;
@@ -42,11 +44,26 @@ with Spawn.Protocol;
 procedure Performance
 is
    use type Ada.Real_Time.Time;
+   use type Ada.Directories.File_Size;
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
    use type Spawn.Protocol.Result_Kind;
 
-   Loops : constant := 1000;
+   Loops                 : constant := 1000;
+   Output_Loops          : constant := 200;
+   Large_Output_Loops    : constant := 50;
+   Lifecycle_Loops       : constant := 25;
+   Parallel_Loops        : constant := 100;
+   Representative_Count : constant := 32;
+
+   Manager_Path : constant String
+     := Ada.Directories.Full_Name ("obj/spawn_manager");
+   Fixture_Path : constant String
+     := Ada.Directories.Full_Name ("obj/spawn_posix_tests");
+   Stdout_Path : constant String
+     := Ada.Directories.Full_Name ("obj/performance.stdout");
+   Stderr_Path : constant String
+     := Ada.Directories.Full_Name ("obj/performance.stderr");
 
    type Sample_Array is array (Positive range <>) of Duration;
 
@@ -55,14 +72,49 @@ is
       Element_Type => Duration,
       Array_Type   => Sample_Array);
 
+   procedure Measure_Lifecycle;
+   --  Measure one-manager pool initialization plus cleanup.
+
    procedure Measure_Manager (Command : String; Label : String);
    --  Measure one command through the current manager pool.
 
-   procedure Measure_Structured;
-   --  Measure direct /bin/true through the complete structured pool path.
+   procedure Measure_Output (Bytes : Positive; Samples : Positive);
+   --  Measure independent stdout and stderr file output of the given size.
+
+   procedure Measure_Parallel (Manager_Count : Positive);
+   --  Measure structured throughput using one task per manager.
+
+   procedure Measure_Structured
+     (Request : Spawn.Protocol.Exec_Request_Type;
+      Label   : String;
+      Samples : Positive := Loops);
+   --  Measure one structured request through the complete pool path.
+
+   function New_Request (Executable : String)
+      return Spawn.Protocol.Exec_Request_Type;
+   --  Construct the common null-stream, empty-environment request.
 
    procedure Report (Label : String; Samples : in out Sample_Array);
    --  Report mean, median and p95 for one sorted sample arm.
+
+   procedure Measure_Lifecycle
+   is
+      Samples : Sample_Array (1 .. Lifecycle_Loops);
+      Start   : Ada.Real_Time.Time;
+   begin
+      Spawn.Pool.Cleanup;
+      for Index in Samples'Range loop
+         Start := Ada.Real_Time.Clock;
+         Spawn.Pool.Init (Manager_Path => Manager_Path);
+         Spawn.Pool.Cleanup;
+         Samples (Index) := Ada.Real_Time.To_Duration
+           (Ada.Real_Time.Clock - Start);
+      end loop;
+      Report (Label   => "one-manager startup and cleanup",
+              Samples => Samples);
+   end Measure_Lifecycle;
+
+   -------------------------------------------------------------------------
 
    procedure Measure_Manager (Command : String; Label : String)
    is
@@ -80,20 +132,159 @@ is
 
    -------------------------------------------------------------------------
 
-   procedure Measure_Structured
+   procedure Measure_Output (Bytes : Positive; Samples : Positive)
    is
-      Request : Spawn.Protocol.Exec_Request_Type;
+      use Ada.Strings.Unbounded;
+
+      Byte_Count : constant String := Ada.Strings.Fixed.Trim
+        (Source => Positive'Image (Bytes),
+         Side   => Ada.Strings.Both);
+      Request : Spawn.Protocol.Exec_Request_Type := New_Request (Fixture_Path);
+
+      procedure Delete_Output;
+      --  Remove files retained by the final benchmark request.
+
+      procedure Delete_Output
+      is
+      begin
+         if Ada.Directories.Exists (Stdout_Path) then
+            Ada.Directories.Delete_File (Stdout_Path);
+         end if;
+         if Ada.Directories.Exists (Stderr_Path) then
+            Ada.Directories.Delete_File (Stderr_Path);
+         end if;
+      end Delete_Output;
+   begin
+      Delete_Output;
+      Request.Arguments.Append ("fixture");
+      Request.Arguments.Append ("output");
+      Request.Arguments.Append (Byte_Count);
+      Request.Directory := To_Unbounded_String
+        (Ada.Directories.Current_Directory);
+      Request.Standard_Output :=
+        (Mode => Spawn.Protocol.Truncate_File,
+         Path => To_Unbounded_String (Stdout_Path));
+      Request.Standard_Error :=
+        (Mode => Spawn.Protocol.Truncate_File,
+         Path => To_Unbounded_String (Stderr_Path));
+
+      Measure_Structured
+        (Request => Request,
+         Label   => "manager structured split output " & Byte_Count
+           & " bytes per stream",
+         Samples => Samples);
+      if Ada.Directories.Size (Stdout_Path)
+           /= Ada.Directories.File_Size (Bytes)
+        or else Ada.Directories.Size (Stderr_Path)
+           /= Ada.Directories.File_Size (Bytes)
+      then
+         raise Program_Error with "structured output size changed";
+      end if;
+      Delete_Output;
+
+   exception
+      when others =>
+         Delete_Output;
+         raise;
+   end Measure_Output;
+
+   -------------------------------------------------------------------------
+
+   procedure Measure_Parallel (Manager_Count : Positive)
+   is
+      protected Failures is
+         procedure Mark;
+         function Seen return Boolean;
+      private
+         Failed : Boolean := False;
+      end Failures;
+
+      protected body Failures is
+         procedure Mark
+         is
+         begin
+            Failed := True;
+         end Mark;
+
+         function Seen return Boolean
+         is (Failed);
+      end Failures;
+
+      task type Runner is
+         entry Start;
+         entry Finish;
+      end Runner;
+
+      task body Runner
+      is
+         Request : constant Spawn.Protocol.Exec_Request_Type
+           := New_Request ("/bin/true");
+         Result : Spawn.Protocol.Result_Type;
+      begin
+         accept Start;
+         begin
+            for Index in 1 .. Parallel_Loops loop
+               Result := Spawn.Pool.Execute (Request => Request);
+               if Result.Kind /= Spawn.Protocol.Exited
+                 or else Result.Exit_Status /= 0
+               then
+                  Failures.Mark;
+                  exit;
+               end if;
+            end loop;
+         exception
+            when others =>
+               Failures.Mark;
+         end;
+         accept Finish;
+      end Runner;
+
+      Workers : array (1 .. Manager_Count) of Runner;
+      Start   : Ada.Real_Time.Time;
+      Elapsed : Duration;
+      Total   : constant Positive := Manager_Count * Parallel_Loops;
+   begin
+      Spawn.Pool.Init
+        (Manager_Path  => Manager_Path,
+         Manager_Count => Manager_Count);
+      Start := Ada.Real_Time.Clock;
+      for Worker of Workers loop
+         Worker.Start;
+      end loop;
+      for Worker of Workers loop
+         Worker.Finish;
+      end loop;
+      Elapsed := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Start);
+      Spawn.Pool.Cleanup;
+
+      if Failures.Seen then
+         raise Program_Error with "parallel structured benchmark failed";
+      end if;
+      Ada.Text_IO.Put_Line
+        ("* manager structured parallel" & Manager_Count'Image
+         & " managers requests=" & Total'Image
+         & " elapsed=" & Duration'Image (Elapsed)
+         & " throughput=" & Long_Float'Image
+           (Long_Float (Total) / Long_Float (Elapsed)) & " requests/s");
+
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         raise;
+   end Measure_Parallel;
+
+   -------------------------------------------------------------------------
+
+   procedure Measure_Structured
+     (Request : Spawn.Protocol.Exec_Request_Type;
+      Label   : String;
+      Samples : Positive := Loops)
+   is
       Result  : Spawn.Protocol.Result_Type;
-      Samples : Sample_Array (1 .. Loops);
+      Timings : Sample_Array (1 .. Samples);
       Start   : Ada.Real_Time.Time;
    begin
-      Request.Executable := Ada.Strings.Unbounded.To_Unbounded_String
-        ("/bin/true");
-      Request.Directory := Ada.Strings.Unbounded.To_Unbounded_String ("/");
-      Request.Standard_Output := (Mode => Spawn.Protocol.Null_Stream);
-      Request.Standard_Error := (Mode => Spawn.Protocol.Null_Stream);
-      Request.Timeout := -1;
-      for Index in Samples'Range loop
+      for Index in Timings'Range loop
          Start := Ada.Real_Time.Clock;
          Result := Spawn.Pool.Execute (Request => Request);
          if Result.Kind /= Spawn.Protocol.Exited
@@ -101,12 +292,28 @@ is
          then
             raise Program_Error with "structured benchmark request failed";
          end if;
-         Samples (Index) := Ada.Real_Time.To_Duration
+         Timings (Index) := Ada.Real_Time.To_Duration
            (Ada.Real_Time.Clock - Start);
       end loop;
-      Report (Label   => "manager structured /bin/true",
-              Samples => Samples);
+      Report (Label => Label, Samples => Timings);
    end Measure_Structured;
+
+   -------------------------------------------------------------------------
+
+   function New_Request (Executable : String)
+      return Spawn.Protocol.Exec_Request_Type
+   is
+      use Ada.Strings.Unbounded;
+   begin
+      return
+        (Executable      => To_Unbounded_String (Executable),
+         Arguments       => Spawn.Protocol.String_Vectors.Empty_Vector,
+         Environment     => Spawn.Protocol.Environment_Vectors.Empty_Vector,
+         Directory       => To_Unbounded_String ("/"),
+         Standard_Output => (Mode => Spawn.Protocol.Null_Stream),
+         Standard_Error  => (Mode => Spawn.Protocol.Null_Stream),
+         Timeout         => -1);
+   end New_Request;
 
    -------------------------------------------------------------------------
 
@@ -128,15 +335,51 @@ is
            (Samples (Samples'First + P95_Index - 1)));
    end Report;
 begin
-   Spawn.Pool.Init
-     (Manager_Path => Ada.Directories.Full_Name ("obj/spawn_manager"));
+   Spawn.Pool.Init (Manager_Path => Manager_Path);
 
    Ada.Text_IO.Put_Line ("* Samples per arm:" & Loops'Image);
    Measure_Manager (Command => "true", Label => "manager shell builtin true");
    Measure_Manager
      (Command => "/bin/true",
       Label   => "manager shell /bin/true");
-   Measure_Structured;
+
+   declare
+      use Ada.Strings.Unbounded;
+
+      Basic          : constant Spawn.Protocol.Exec_Request_Type
+        := New_Request ("/bin/true");
+      Representative : Spawn.Protocol.Exec_Request_Type
+        := New_Request ("/bin/true");
+   begin
+      for Index in 1 .. Representative_Count loop
+         declare
+            Suffix : constant String := Ada.Strings.Fixed.Trim
+              (Source => Positive'Image (Index),
+               Side   => Ada.Strings.Both);
+         begin
+            Representative.Arguments.Append
+              ("representative argument " & Suffix);
+            Representative.Environment.Append
+              ((Name  => To_Unbounded_String ("PERF_VALUE_" & Suffix),
+                Value => To_Unbounded_String
+                  ("representative environment value " & Suffix)));
+         end;
+      end loop;
+
+      Measure_Structured
+        (Request => Basic,
+         Label   => "manager structured /bin/true");
+      Ada.Text_IO.Put_Line
+        ("* representative structured frame bytes:"
+         & Positive'Image (Spawn.Protocol.Exec_Request_Frame_Length
+           (Request      => Representative,
+            Active_Bound => Spawn.Protocol.Maximum_Frame_Size)));
+      Measure_Structured
+        (Request => Representative,
+         Label   => "manager structured 32 argv and environment entries");
+      Measure_Output (Bytes => 64, Samples => Output_Loops);
+      Measure_Output (Bytes => 64 * 1024, Samples => Large_Output_Loops);
+   end;
 
    declare
       Args    : GNAT.OS_Lib.Argument_List (1 .. 4);
@@ -169,4 +412,13 @@ begin
    end;
 
    Spawn.Pool.Cleanup;
+   Measure_Lifecycle;
+   declare
+      Manager_Counts : constant array (Positive range 1 .. 4) of Positive
+        := (1, 2, 4, 8);
+   begin
+      for Manager_Count of Manager_Counts loop
+         Measure_Parallel (Manager_Count => Manager_Count);
+      end loop;
+   end;
 end Performance;
