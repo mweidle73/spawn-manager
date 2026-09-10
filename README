@@ -88,8 +88,15 @@ cannot complete, the request reports a supervision failure instead of success
 and poisons the pool. This prevents background descendants from crossing the
 lease boundary into a later request.
 
-`Pid_Setup` continues to receive the long-lived manager PID. A cgroup move
-therefore remains manager-wide and is inherited by its later children.
+`Pid_Setup` continues to receive the long-lived manager PID. An optional
+`Pid_Reset` runs after a valid result while the same pool lease is still
+exclusive, before another caller can reuse that manager. Abuild uses the pair
+to move a manager into one worker cgroup for the request and return it to the
+Abuild process cgroup afterwards. If setup, transport, reset or caller task
+execution fails, the manager is poisoned rather than exposed for reuse. A
+direct caller which supplies no reset retains the manager-wide placement
+behavior explicitly.
+
 A descendant which deliberately calls `setsid()` can leave the request process
 group; containing that case requires the separately selected cgroup policy and
 is not claimed by the process-group fallback.
