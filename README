@@ -55,8 +55,9 @@ The two request payloads are:
 The shell request inherits the manager environment and is normalized to
 `/bin/bash -o pipefail -c command`. The exec request uses an absolute
 executable as implicit `argv[0]`; its transmitted arguments exclude `argv[0]`
-and its environment replaces the complete inherited environment. Version 1
-always connects stdin to `/dev/null`. A stream is one mode byte: `0` selects
+and its environment replaces the complete inherited environment. Its working
+directory is also absolute. Version 1 always connects stdin to `/dev/null`. A
+stream is one mode byte: `0` selects
 `/dev/null`, while `1` is followed by an absolute path string opened without
 following a final symlink and with truncate semantics; an absent file is
 created with mode `0600`.

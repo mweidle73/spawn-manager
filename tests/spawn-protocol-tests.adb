@@ -36,17 +36,17 @@ package body Spawn.Protocol.Tests is
 
    procedure Exec_Golden_Data
    is
-      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 61)
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 62)
         := (16#53#, 16#50#, 16#57#, 16#4e#,
             16#00#, 16#01#, 16#00#, 16#02#,
-            16#00#, 16#00#, 16#00#, 16#31#,
+            16#00#, 16#00#, 16#00#, 16#32#,
             16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#78#,
             16#00#, 16#00#, 16#00#, 16#01#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#61#,
             16#00#, 16#00#, 16#00#, 16#01#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#45#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#56#,
-            16#00#, 16#00#, 16#00#, 16#00#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#2f#,
             16#00#,
             16#01#, 16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#65#,
             16#ff#, 16#ff#, 16#ff#, 16#ff#,
@@ -60,7 +60,7 @@ package body Spawn.Protocol.Tests is
       Expected.Environment.Append
         ((Name  => Ada.Strings.Unbounded.To_Unbounded_String ("E"),
           Value => Ada.Strings.Unbounded.To_Unbounded_String ("V")));
-      Expected.Directory := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Expected.Directory := Ada.Strings.Unbounded.To_Unbounded_String ("/");
       Expected.Standard_Output := (Mode => Null_Stream);
       Expected.Standard_Error :=
         (Mode => Truncate_File,
@@ -91,17 +91,17 @@ package body Spawn.Protocol.Tests is
 
    procedure Exec_Rejects_Invalid_Data
    is
-      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 61)
+      Golden : constant Ada.Streams.Stream_Element_Array (1 .. 62)
         := (16#53#, 16#50#, 16#57#, 16#4e#,
             16#00#, 16#01#, 16#00#, 16#02#,
-            16#00#, 16#00#, 16#00#, 16#31#,
+            16#00#, 16#00#, 16#00#, 16#32#,
             16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#78#,
             16#00#, 16#00#, 16#00#, 16#01#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#61#,
             16#00#, 16#00#, 16#00#, 16#01#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#45#,
             16#00#, 16#00#, 16#00#, 16#01#, 16#56#,
-            16#00#, 16#00#, 16#00#, 16#00#,
+            16#00#, 16#00#, 16#00#, 16#01#, 16#2f#,
             16#00#,
             16#01#, 16#00#, 16#00#, 16#00#, 16#02#, 16#2f#, 16#65#,
             16#ff#, 16#ff#, 16#ff#, 16#ff#,
@@ -159,7 +159,7 @@ package body Spawn.Protocol.Tests is
       declare
          Data : Ada.Streams.Stream_Element_Array := Golden;
       begin
-         Data (46) := 2;
+         Data (47) := 2;
          Reject_Protocol (Data => Data, Name => "unknown stream mode");
       end;
       declare
@@ -187,20 +187,26 @@ package body Spawn.Protocol.Tests is
       declare
          Data : Ada.Streams.Stream_Element_Array := Golden;
       begin
-         Data (52) := Character'Pos ('e');
+         Data (46) := Character'Pos ('w');
+         Reject_Request (Data => Data, Name => "relative directory");
+      end;
+      declare
+         Data : Ada.Streams.Stream_Element_Array := Golden;
+      begin
+         Data (53) := Character'Pos ('e');
          Reject_Request (Data => Data, Name => "relative stream path");
       end;
       declare
-         Data : Ada.Streams.Stream_Element_Array := Golden (1 .. 60);
+         Data : Ada.Streams.Stream_Element_Array := Golden (1 .. 61);
       begin
-         Data (12) := 16#30#;
+         Data (12) := 16#31#;
          Reject_Protocol (Data => Data, Name => "truncated exec timeout");
       end;
       declare
-         Data : Ada.Streams.Stream_Element_Array (1 .. 62) := (others => 0);
+         Data : Ada.Streams.Stream_Element_Array (1 .. 63) := (others => 0);
       begin
-         Data (1 .. 61) := Golden;
-         Data (12) := 16#32#;
+         Data (1 .. 62) := Golden;
+         Data (12) := 16#33#;
          Reject_Protocol (Data => Data, Name => "trailing exec data");
       end;
    end Exec_Rejects_Invalid_Data;
@@ -253,7 +259,7 @@ package body Spawn.Protocol.Tests is
       Request.Arguments.Clear;
       Request.Environment.Clear;
       Request.Executable := Ada.Strings.Unbounded.To_Unbounded_String ("/x");
-      Request.Directory := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Request.Directory := Ada.Strings.Unbounded.To_Unbounded_String ("/");
       Request.Standard_Output := (Mode => Null_Stream);
       Request.Standard_Error := (Mode => Null_Stream);
       Request.Timeout := 0;

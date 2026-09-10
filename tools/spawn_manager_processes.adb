@@ -266,7 +266,11 @@ package body Spawn_Manager_Processes is
       Directory_Value  : constant String := US.To_String (Request.Directory);
    begin
       Require_Absolute (Value => Executable_Value, Name => "executable");
-      Require_C_String (Value => Directory_Value, Name => "directory");
+      if Request.Environment_Use = Replace then
+         Require_Absolute (Value => Directory_Value, Name => "directory");
+      else
+         Require_C_String (Value => Directory_Value, Name => "directory");
+      end if;
       if Request.Timeout_MS < -1 then
          raise Constraint_Error with "timeout must be -1 or nonnegative";
       end if;

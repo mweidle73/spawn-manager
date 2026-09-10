@@ -291,6 +291,9 @@ package body Spawn.Protocol is
         (Data   => Data,
          Cursor => Cursor,
          Value  => Decoded.Directory);
+      Validate_Absolute_Path
+        (Value => Ada.Strings.Unbounded.To_String (Decoded.Directory),
+         Name  => "directory");
       Decode_Stream
         (Data   => Data,
          Cursor => Cursor,
@@ -1033,7 +1036,11 @@ package body Spawn.Protocol is
       end loop;
 
       Payload_Length := Payload_Length
-        + String_Field_Length (Value => Request.Directory)
+        + String_Field_Length (Value => Request.Directory);
+      Validate_Absolute_Path
+        (Value => Ada.Strings.Unbounded.To_String (Request.Directory),
+         Name  => "directory");
+      Payload_Length := Payload_Length
         + Stream_Field_Length (Stream => Request.Standard_Output)
         + Stream_Field_Length (Stream => Request.Standard_Error);
       return Frame_Length
