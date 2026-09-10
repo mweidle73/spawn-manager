@@ -207,7 +207,8 @@ package body Spawn_Manager_Tests is
             Ada.Text_IO.Open
               (File => Output,
                Mode => Ada.Text_IO.In_File,
-               Name => Stdout_Path);
+               Name => Stdout_Path,
+               Form => "shared=no");
             Assert
               (Condition => Ada.Text_IO.Get_Line (File => Output)
                  = "verified stdout",
@@ -216,7 +217,8 @@ package body Spawn_Manager_Tests is
             Ada.Text_IO.Open
               (File => Output,
                Mode => Ada.Text_IO.In_File,
-               Name => Stderr_Path);
+               Name => Stderr_Path,
+               Form => "shared=no");
             Assert
               (Condition => Ada.Text_IO.Get_Line (File => Output)
                  = "verified stderr",
