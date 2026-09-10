@@ -93,6 +93,9 @@ package Spawn.Pool.Tests is
    procedure Protocol_Failure_Poisons_Pool;
    --  Verify a manager which reports protocol failure is never reused.
 
+   procedure Supervision_Failures_Poison_Pool;
+   --  Verify every supervision-capable stage fails the complete pool closed.
+
    procedure Relative_Socket_Transport;
    --  Verify a short relative socket survives an overlong absolute spelling.
 

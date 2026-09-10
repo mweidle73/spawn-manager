@@ -60,12 +60,26 @@ static uint32_t decode_u32(const unsigned char *data)
 
 int main(int argc, char *argv[])
 {
-	static const unsigned char result[] = {
+	/*
+	 * Independent complete V1 result frames: 12-byte big-endian header,
+	 * followed by either kind 5 plus one string or kind 3 plus stage,
+	 * errno and one string. The environment selects the latter frame's two
+	 * stage bytes; the Ada decoder constants are not reused here.
+	 */
+	static const unsigned char protocol_failure_result[] = {
 		'S', 'P', 'W', 'N', 0, 1, 0, 3, 0, 0, 0, 9,
 		5, 0, 0, 0, 4, 's', 't', 'o', 'p'
 	};
+	unsigned char supervision_failure_result[] = {
+		'S', 'P', 'W', 'N', 0, 1, 0, 3, 0, 0, 0, 22,
+		3, 0, 17, 0, 0, 0, 5, 0, 0, 0, 11,
+		'c', 'o', 'n', 't', 'a', 'i', 'n', 'm', 'e', 'n', 't'
+	};
 	unsigned char header[12];
 	unsigned char *payload;
+	const unsigned char *result = protocol_failure_result;
+	const char *stage_text = getenv("SPAWN_TEST_SUPERVISION_STAGE");
+	size_t result_length = sizeof(protocol_failure_result);
 	struct sockaddr_un address = { .sun_family = AF_UNIX };
 	uint32_t payload_length;
 	int listener;
@@ -73,6 +87,20 @@ int main(int argc, char *argv[])
 
 	if (argc != 3)
 		return 2;
+	if (stage_text != NULL) {
+		char *end;
+		long stage;
+
+		errno = 0;
+		stage = strtol(stage_text, &end, 10);
+		if (errno != 0 || end == stage_text || *end != '\0'
+		    || stage < 0 || stage > 17)
+			return 4;
+		supervision_failure_result[13] = (unsigned char)(stage >> 8);
+		supervision_failure_result[14] = (unsigned char)stage;
+		result = supervision_failure_result;
+		result_length = sizeof(supervision_failure_result);
+	}
 	if (strlen(argv[2]) >= sizeof(address.sun_path))
 		return 3;
 	strcpy(address.sun_path, argv[2]);
@@ -96,7 +124,7 @@ int main(int argc, char *argv[])
 	read_exact(connection, payload, payload_length);
 	free(payload);
 
-	write_exact(connection, result, sizeof(result));
+	write_exact(connection, result, result_length);
 	if (close(connection) < 0 || close(listener) < 0)
 		fail("close");
 	return 0;

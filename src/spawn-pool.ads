@@ -91,8 +91,10 @@ package Spawn.Pool is
    --  Pid_Setup receives the selected long-lived manager before it forks the
    --  request child. Pid_Reset runs while the same manager lease is still
    --  exclusive; concurrent calls acquire independent manager leases. A
-   --  protocol-failure result poisons the complete pool because the reporting
-   --  manager cannot be assumed to accept another request.
+   --  protocol or internal-supervision failure poisons the complete pool
+   --  because the reporting manager cannot be assumed safe for reuse. Any
+   --  lease abandoned by setup, reset, transport failure or task abort has
+   --  the same fail-closed pool-wide effect.
 
    procedure Execute_Checked
      (Request   : Spawn.Protocol.Exec_Request_Type;

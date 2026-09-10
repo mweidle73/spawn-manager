@@ -112,6 +112,9 @@ package body Spawn.Pool.Tests is
 
    Test_Log_Exception : exception;
 
+   Cleanup_Log_Attempts : Natural := 0;
+   --  Count injected cleanup diagnostics so the failure test is non-vacuous.
+
    procedure Test_Log_Error (Msg : String);
    --  Just raises a test exception.
 
@@ -189,6 +192,17 @@ package body Spawn.Pool.Tests is
          delay 0.010;
       end loop;
 
+      begin
+         Spawn.Pool.Execute (Command => "/bin/true");
+         Fail (Message => "aborted lease did not poison the pool");
+      exception
+         when E : Spawn.Pool.Pool_Error =>
+            Assert
+              (Condition => Ada.Exceptions.Exception_Message (X => E)
+                 = "spawn manager pool has failed",
+               Message   => "aborted-lease pool diagnostic differs");
+      end;
+
       Spawn.Pool.Cleanup;
       Initialized := False;
 
@@ -218,6 +232,7 @@ package body Spawn.Pool.Tests is
           (Source  => Msg,
            Pattern => "Timeout occured") > 0
       then
+         Cleanup_Log_Attempts := Cleanup_Log_Attempts + 1;
          raise Test_Log_Exception;
       end if;
    end Cleanup_Log_Error;
@@ -406,18 +421,22 @@ package body Spawn.Pool.Tests is
    is
       Initialized : Boolean := False;
    begin
+      Cleanup_Log_Attempts := 0;
       Spawn.Pool.Init (Manager_Path => Manager_Path,
                        Log          => Cleanup_Log_Error'Access);
       Initialized := True;
       Spawn.Pool.Execute (Command => "/bin/true");
       Spawn.Pool.Cleanup;
       Initialized := False;
+      Assert (Condition => Cleanup_Log_Attempts > 0,
+              Message   => "cleanup log failure was not injected");
 
       Spawn.Pool.Init (Manager_Path => Manager_Path);
       Initialized := True;
       Spawn.Pool.Execute (Command => "/bin/true");
       Spawn.Pool.Cleanup;
       Initialized := False;
+      Cleanup_Log_Attempts := 0;
 
    exception
       when others =>
@@ -428,6 +447,7 @@ package body Spawn.Pool.Tests is
                when others => null;
             end;
          end if;
+         Cleanup_Log_Attempts := 0;
          raise;
    end Cleanup_Survives_Log_Error;
 
@@ -1177,6 +1197,9 @@ package body Spawn.Pool.Tests is
         (Routine => Protocol_Failure_Poisons_Pool'Access,
          Name    => "Poison pool after protocol failure");
       T.Add_Test_Routine
+        (Routine => Supervision_Failures_Poison_Pool'Access,
+         Name    => "Poison pool after supervision failures");
+      T.Add_Test_Routine
         (Routine => Relative_Socket_Transport'Access,
          Name    => "Preserve short relative socket transport");
       T.Add_Test_Routine
@@ -1602,15 +1625,40 @@ package body Spawn.Pool.Tests is
 
    procedure Protocol_Failure_Poisons_Pool
    is
+      Variable_Name : constant String := "SPAWN_TEST_SUPERVISION_STAGE";
+      Was_Set       : constant Boolean :=
+        Ada.Environment_Variables.Exists (Name => Variable_Name);
+      Original      : constant Unbounded_String :=
+        (if Was_Set then To_Unbounded_String
+           (Ada.Environment_Variables.Value (Name => Variable_Name))
+         else Null_Unbounded_String);
       Request     : Protocol.Exec_Request_Type;
       Result      : Protocol.Result_Type;
       Initialized : Boolean := False;
+
+      procedure Restore_Environment;
+      --  Restore the external fixture selector after manager startup.
+
+      procedure Restore_Environment
+      is
+      begin
+         if Was_Set then
+            Ada.Environment_Variables.Set
+              (Name  => Variable_Name,
+               Value => To_String (Original));
+         else
+            Ada.Environment_Variables.Clear (Name => Variable_Name);
+         end if;
+      end Restore_Environment;
    begin
+      Ada.Environment_Variables.Clear (Name => Variable_Name);
       Request.Executable := To_Unbounded_String ("/bin/true");
       Request.Directory := To_Unbounded_String ("/");
+      Request.Timeout := -1;
 
       Spawn.Pool.Init (Manager_Path => Protocol_Failure_Manager_Path);
       Initialized := True;
+      Restore_Environment;
       Result := Spawn.Pool.Execute (Request => Request);
       Assert (Condition => Result.Kind = Protocol.Protocol_Failed,
               Message   => "fake manager result was not protocol failure");
@@ -1637,6 +1685,7 @@ package body Spawn.Pool.Tests is
 
    exception
       when others =>
+         Restore_Environment;
          if Initialized then
             Spawn.Pool.Cleanup;
          end if;
@@ -1694,6 +1743,97 @@ package body Spawn.Pool.Tests is
          end if;
          raise;
    end Relative_Socket_Transport;
+
+   -------------------------------------------------------------------------
+
+   procedure Supervision_Failures_Poison_Pool
+   is
+      Poison_Stages : constant array (Positive range <>) of
+        Protocol.Failure_Stage :=
+          (Protocol.No_Failure,
+           Protocol.Enable_Subreaper,
+           Protocol.Create_Error_Pipe,
+           Protocol.Process_Group,
+           Protocol.Wait_Child,
+           Protocol.Terminate_Group);
+      Variable_Name : constant String :=
+        "SPAWN_TEST_SUPERVISION_STAGE";
+      Was_Set       : constant Boolean :=
+        Ada.Environment_Variables.Exists (Name => Variable_Name);
+      Original      : constant Unbounded_String :=
+        (if Was_Set then To_Unbounded_String
+           (Ada.Environment_Variables.Value (Name => Variable_Name))
+         else Null_Unbounded_String);
+      Request       : Protocol.Exec_Request_Type;
+      Result        : Protocol.Result_Type;
+      Initialized   : Boolean := False;
+
+      procedure Restore_Environment;
+      --  Restore the environment after the fake manager has inherited it.
+
+      procedure Restore_Environment
+      is
+      begin
+         if Was_Set then
+            Ada.Environment_Variables.Set
+              (Name  => Variable_Name,
+               Value => To_String (Original));
+         else
+            Ada.Environment_Variables.Clear (Name => Variable_Name);
+         end if;
+      end Restore_Environment;
+   begin
+      Request.Executable := To_Unbounded_String ("/bin/true");
+      Request.Directory := To_Unbounded_String ("/");
+      Request.Timeout := -1;
+      for Stage of Poison_Stages loop
+         Ada.Environment_Variables.Set
+           (Name  => Variable_Name,
+            Value => Ada.Strings.Fixed.Trim
+              (Source => Natural'Image
+                 (Protocol.Failure_Stage'Pos (Stage)),
+               Side   => Ada.Strings.Both));
+         Spawn.Pool.Init (Manager_Path => Protocol_Failure_Manager_Path);
+         Initialized := True;
+         Restore_Environment;
+
+         Result := Spawn.Pool.Execute (Request => Request);
+         Assert
+           (Condition => Result.Kind = Protocol.Spawn_Failed
+              and then Result.Failure.Stage = Stage,
+            Message   => "fake manager result did not retain " & Stage'Image);
+
+         begin
+            Result := Spawn.Pool.Execute (Request => Request);
+            Fail (Message => "failed pool reused a manager after "
+                  & Stage'Image);
+         exception
+            when E : Spawn.Pool.Pool_Error =>
+               Assert
+                 (Condition => Ada.Exceptions.Exception_Message (X => E)
+                    = "spawn manager pool has failed",
+                  Message   => "pool diagnostic differs after "
+                    & Stage'Image);
+         end;
+
+         Spawn.Pool.Cleanup;
+         Initialized := False;
+      end loop;
+
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+   exception
+      when others =>
+         Restore_Environment;
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         raise;
+   end Supervision_Failures_Poison_Pool;
 
    -------------------------------------------------------------------------
 

@@ -151,19 +151,24 @@ static int highest_open_descriptor(void)
 }
 
 /*
- * Report one pre-exec failure without allocation or stdio. ERROR_FD is a
- * nonblocking pipe and the fixed record is below PIPE_BUF, so the write is
- * atomic whenever it succeeds.
+ * Report one pre-exec failure without allocation or stdio. fd is a
+ * nonblocking error-pipe endpoint and the fixed record is below PIPE_BUF, so
+ * the write is atomic whenever it succeeds.
  */
-static void report_child_error(int stage)
+static void report_child_error_to(int fd, int stage, int error_number)
 {
-	struct child_error error = { stage, errno };
+	struct child_error error = { stage, error_number };
 	ssize_t written;
 
 	do {
-		written = write(ERROR_FD, &error, sizeof(error));
+		written = write(fd, &error, sizeof(error));
 	} while (written < 0 && errno == EINTR);
 	_exit(127);
+}
+
+static void report_child_error(int stage)
+{
+	report_child_error_to(ERROR_FD, stage, errno);
 }
 
 static int duplicate_to(int source, int target)
@@ -178,7 +183,7 @@ static int open_output_file(int mode, const char *path)
 	if (mode == SPAWN_POSIX_TRUNCATE_FILE)
 		return open(path,
 			O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
-			0600);
+			0666);
 	errno = EINVAL;
 	return -1;
 }
@@ -230,8 +235,16 @@ static void child_exec(
 
 	(void)close(error_read_fd);
 	if (error_write_fd != ERROR_FD) {
-		if (dup2(error_write_fd, ERROR_FD) < 0)
-			report_child_error(SPAWN_POSIX_CREATE_ERROR_PIPE);
+		if (dup2(error_write_fd, ERROR_FD) < 0) {
+			int saved_errno = errno;
+
+			/*
+			 * ERROR_FD still belongs to the inherited manager state. Report
+			 * through the known pipe endpoint instead of writing to fd 3.
+			 */
+			report_child_error_to(error_write_fd,
+				SPAWN_POSIX_CREATE_ERROR_PIPE, saved_errno);
+		}
 		(void)close(error_write_fd);
 	}
 	if (setpgid(0, 0) < 0)

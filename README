@@ -59,8 +59,10 @@ and its environment replaces the complete inherited environment. Its working
 directory is also absolute. Version 1 always connects stdin to `/dev/null`. A
 stream is one mode byte: `0` selects
 `/dev/null`, while `1` is followed by an absolute path string opened without
-following a final symlink and with truncate semantics; an absent file is
-created with mode `0600`.
+following a final symlink and with truncate semantics. An absent file is
+created from mode `0666` filtered by the manager's `umask`, matching shell
+redirection; truncating an existing file preserves its mode. Callers which
+need an owner-only output may create it with mode `0600` before the request.
 
 A result starts with one kind byte: `0` plus `u32` exit status, `1` plus `u16`
 signal, `2` with no further field for timeout, `3` plus `u16` failure stage,
@@ -94,9 +96,14 @@ lease boundary into a later request.
 exclusive, before another caller can reuse that manager. Abuild uses the pair
 to move a manager into one worker cgroup for the request and return it to the
 Abuild process cgroup afterwards. If setup, transport, reset or caller task
-execution fails, the manager is poisoned rather than exposed for reuse. A
-direct caller which supplies no reset retains the manager-wide placement
-behavior explicitly.
+execution fails, the complete pool is poisoned rather than exposing any
+manager for reuse. A direct caller which supplies no reset retains the
+manager-wide placement behavior explicitly.
+
+Version 1 reports internal and child-spawn failures through one result kind.
+Stages which can represent manager-side supervision therefore poison the
+complete pool, including the ambiguous error-pipe and process-group stages.
+Stages which can only be child-side pre-exec failures remain reusable.
 
 A descendant which deliberately calls `setsid()` can leave the request process
 group; containing that case requires the separately selected cgroup policy and

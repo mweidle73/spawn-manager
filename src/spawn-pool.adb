@@ -83,7 +83,7 @@ package body Spawn.Pool is
       --  Task-owned manager lease whose finalizer also runs during task abort.
 
       procedure Abandon (Lease : in out Guard);
-      --  Poison the selected manager and return its active-count slot once.
+      --  Poison the complete pool and return its active-count slot once.
 
       overriding
       procedure Finalize (Lease : in out Guard);
@@ -97,6 +97,9 @@ package body Spawn.Pool is
 
    procedure Create_Private_Directory (Path : String);
    --  Atomically create Path with no group or other access.
+
+   function Poisons_Pool (Result : Protocol.Result_Type) return Boolean;
+   --  Return whether Result leaves manager supervision unsafe for reuse.
 
    procedure Remove_Pool_Directory (Path : String);
    --  Remove an empty private socket directory without aborting cleanup.
@@ -454,7 +457,7 @@ package body Spawn.Pool is
                   Diagnostic => To_Unbounded_String
                     ("manager transport failed"));
          end;
-         if Result.Kind = Protocol.Protocol_Failed then
+         if Poisons_Pool (Result => Result) then
             return Result;
          end if;
          Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
@@ -521,9 +524,12 @@ package body Spawn.Pool is
               "Manager transport failed for command: '" & Command & "'";
       end;
 
-      if Result.Kind = Protocol.Protocol_Failed then
+      if Poisons_Pool (Result => Result) then
          raise Command_Failed with
-           "Manager protocol failed for command: '" & Command & "'";
+           (if Result.Kind = Protocol.Protocol_Failed
+            then "Manager protocol failed for command: '"
+            else "Manager supervision failed for command: '")
+           & Command & "'";
       end if;
 
       Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
@@ -758,6 +764,35 @@ package body Spawn.Pool is
          L (Msg => "Error logging file contents '"
             & Filename & "': " & Ada.Exceptions.Exception_Message (X => E));
    end Log_A_File;
+
+   -------------------------------------------------------------------------
+
+   function Poisons_Pool (Result : Protocol.Result_Type) return Boolean
+   is
+   begin
+      case Result.Kind is
+         when Protocol.Protocol_Failed =>
+            return True;
+         when Protocol.Spawn_Failed =>
+            --  Version 1 retains the detailed stage but deliberately merges
+            --  the C core's internal and child-spawn result classes. These
+            --  stages can originate in manager-side supervision; fail closed
+            --  because the preceding request may not be contained or reaped.
+            case Result.Failure.Stage is
+               when Protocol.No_Failure
+                  | Protocol.Enable_Subreaper
+                  | Protocol.Create_Error_Pipe
+                  | Protocol.Process_Group
+                  | Protocol.Wait_Child
+                  | Protocol.Terminate_Group =>
+                  return True;
+               when others =>
+                  return False;
+            end case;
+         when others =>
+            return False;
+      end case;
+   end Poisons_Pool;
 
    -------------------------------------------------------------------------
 

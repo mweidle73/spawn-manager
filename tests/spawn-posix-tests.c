@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -269,6 +270,67 @@ static void test_exit_and_signal(const char *self)
 	pass("exact exit and signal results");
 }
 
+static void test_error_pipe_duplication(const char *self)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { (char *)self, "fixture", "exit37", NULL };
+	struct spawn_posix_result result;
+	struct rlimit original_limit;
+	struct rlimit limited_limit;
+	int saved_stdin;
+	int saved_stdout;
+	int call_result;
+	int restore_limit_result;
+	int restore_stdin_result;
+	int restore_stdout_result;
+
+	require(spawn_posix_execute(
+		self, arguments, 0, empty_environment, "/", 0, NULL, 0, NULL,
+		1000, &result) == 0, "prepare descriptor ceiling");
+	require_exited(&result, 37, "descriptor-ceiling preparation result");
+
+	/*
+	 * The preparation call caches the parent's descriptor ceiling. Free
+	 * descriptors zero and one, then restrict new descriptors to 0..2 so
+	 * pipe2 returns them and the child's dup2(error_write_fd, 3) fails with
+	 * EBADF. The original implementation then lost the error record and
+	 * reported exit 127; the dedicated pipe endpoint must preserve the
+	 * structured failure.
+	 */
+	require(getrlimit(RLIMIT_NOFILE, &original_limit) == 0,
+		"read descriptor limit");
+	require(original_limit.rlim_cur >= 3, "descriptor limit supports fixture");
+	saved_stdin = dup(STDIN_FILENO);
+	saved_stdout = dup(STDOUT_FILENO);
+	require(saved_stdin >= 0 && saved_stdout >= 0,
+		"save standard descriptors");
+	limited_limit = original_limit;
+	limited_limit.rlim_cur = 3;
+	require(setrlimit(RLIMIT_NOFILE, &limited_limit) == 0,
+		"restrict descriptor limit");
+	require(close(STDIN_FILENO) == 0 && close(STDOUT_FILENO) == 0,
+		"free low descriptors");
+
+	call_result = spawn_posix_execute(
+		self, arguments, 0, empty_environment, "/", 0, NULL, 0, NULL,
+		1000, &result);
+
+	restore_limit_result = setrlimit(RLIMIT_NOFILE, &original_limit);
+	restore_stdin_result = dup2(saved_stdin, STDIN_FILENO);
+	restore_stdout_result = dup2(saved_stdout, STDOUT_FILENO);
+	(void)close(saved_stdin);
+	(void)close(saved_stdout);
+	require(restore_limit_result == 0 && restore_stdin_result == STDIN_FILENO
+		&& restore_stdout_result == STDOUT_FILENO,
+		"restore descriptor environment");
+	require(call_result == 0
+		&& result.kind == SPAWN_POSIX_SPAWN_FAILED
+		&& result.failure_stage == SPAWN_POSIX_CREATE_ERROR_PIPE
+		&& result.error_number == EBADF,
+		"report error-pipe duplication failure");
+	pass("error-pipe duplication failure channel");
+}
+
 static void test_exec_failure(const char *self)
 {
 	char *empty_environment[] = { NULL };
@@ -314,9 +376,9 @@ static void test_request_data(
 	require(stat(stdout_path, &stdout_status) == 0
 		&& stat(stderr_path, &stderr_status) == 0,
 		"stat split streams");
-	require((stdout_status.st_mode & 0777) == 0600
-		&& (stderr_status.st_mode & 0777) == 0600,
-		"private stream create modes");
+	require((stdout_status.st_mode & 0777) == 0644
+		&& (stderr_status.st_mode & 0777) == 0644,
+		"umask-filtered stream create modes");
 	stdout_content = read_file(stdout_path);
 	stderr_content = read_file(stderr_path);
 	require(strcmp(stdout_content, "verified stdout\n") == 0,
@@ -325,6 +387,21 @@ static void test_request_data(
 		"independent stderr");
 	free(stdout_content);
 	free(stderr_content);
+	require(chmod(stdout_path, 0600) == 0
+		&& chmod(stderr_path, 0640) == 0,
+		"prepare existing stream modes");
+	require(spawn_posix_execute(
+		self, arguments, 0, environment, directory,
+		SPAWN_POSIX_TRUNCATE_FILE, stdout_path,
+		SPAWN_POSIX_TRUNCATE_FILE, stderr_path, 1000, &result) == 0,
+		"truncate existing stream fixtures");
+	require_exited(&result, 0, "existing-stream result");
+	require(stat(stdout_path, &stdout_status) == 0
+		&& stat(stderr_path, &stderr_status) == 0,
+		"restat existing streams");
+	require((stdout_status.st_mode & 0777) == 0600
+		&& (stderr_status.st_mode & 0777) == 0640,
+		"preserve existing stream modes");
 	pass("argv, replacement environment, cwd and split streams");
 }
 
@@ -433,11 +510,13 @@ int main(int argc, char *argv[], char *envp[])
 	char pid_path[PATH_MAX];
 	int source_fd;
 	int inherited_fd;
+	mode_t original_umask;
 
 	if (argc == 2 && strcmp(argv[1], "--benchmark") == 0)
 		return benchmark();
 	if (argc > 1 && strcmp(argv[1], "fixture") == 0)
 		return fixture(argc, argv, envp);
+	original_umask = umask(0022);
 	require(realpath(argv[0], self) != NULL, "resolve test executable");
 	require(getcwd(cwd, sizeof(cwd)) != NULL, "get test cwd");
 	require(snprintf(root, sizeof(root), "%s/obj/posix-core-test", cwd)
@@ -467,6 +546,7 @@ int main(int argc, char *argv[], char *envp[])
 	require(inherited_fd >= 100, "duplicate descriptor fixture");
 
 	test_exit_and_signal(self);
+	test_error_pipe_duplication(self);
 	test_exec_failure(self);
 	test_request_data(self, root, stdout_path, stderr_path);
 	test_stdin_and_descriptors(self, inherited_fd);
@@ -481,6 +561,7 @@ int main(int argc, char *argv[], char *envp[])
 	require(unlink(stderr_path) == 0, "remove stderr");
 	require(unlink(pid_path) == 0, "remove pid file");
 	require(rmdir(root) == 0, "remove test root");
+	(void)umask(original_umask);
 	printf("PASS POSIX core total: %u\n", passed);
 	return 0;
 }

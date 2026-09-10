@@ -81,7 +81,7 @@ install_manager: spawn_manager
 	rm -f $(PREFIX)/spawn_wrapper
 	install -m 755 $(OBJDIR)/spawn_manager $(PREFIX)
 
-cov: spawn_manager
+cov: $(PROTOCOL_FAILURE_MANAGER) spawn_manager
 	@rm -f $(COVDIR)/*.gcda
 	@gnatmake -Pspawn_tests.gpr -p -XBUILD="coverage"
 	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
