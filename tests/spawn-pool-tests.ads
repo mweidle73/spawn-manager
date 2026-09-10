@@ -90,6 +90,9 @@ package Spawn.Pool.Tests is
    procedure Pool_Depleted;
    --  Verify exception handling if pool is depleted.
 
+   procedure Protocol_Failure_Poisons_Pool;
+   --  Verify a manager which reports protocol failure is never reused.
+
    procedure Relative_Socket_Transport;
    --  Verify a short relative socket survives an overlong absolute spelling.
 
@@ -116,6 +119,9 @@ package Spawn.Pool.Tests is
 
    procedure Cleanup_Socket_After_Delete_Error;
    --  Verify cleanup continues after a manager socket cannot be deleted.
+
+   procedure Cleanup_Survives_Log_Error;
+   --  Verify a failing cleanup diagnostic cannot lock the pool lifecycle.
 
    procedure Log_A_File;
    --  Test Log_A_File procedure;

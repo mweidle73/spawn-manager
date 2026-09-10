@@ -90,7 +90,9 @@ package Spawn.Pool is
    --  Execute one structured request and return its exact termination result.
    --  Pid_Setup receives the selected long-lived manager before it forks the
    --  request child. Pid_Reset runs while the same manager lease is still
-   --  exclusive; concurrent calls acquire independent manager leases.
+   --  exclusive; concurrent calls acquire independent manager leases. A
+   --  protocol-failure result poisons the complete pool because the reporting
+   --  manager cannot be assumed to accept another request.
 
    procedure Execute_Checked
      (Request   : Spawn.Protocol.Exec_Request_Type;

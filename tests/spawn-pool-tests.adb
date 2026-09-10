@@ -71,6 +71,8 @@ package body Spawn.Pool.Tests is
 
    Manager_Path : constant String
      := Ada.Directories.Full_Name (Name => "obj/spawn_manager");
+   Protocol_Failure_Manager_Path : constant String
+     := Ada.Directories.Full_Name (Name => "obj/protocol_failure_manager");
 
    function C_Directory_Mode (Path : CS.chars_ptr) return C.int
      with Import,
@@ -112,6 +114,9 @@ package body Spawn.Pool.Tests is
 
    procedure Test_Log_Error (Msg : String);
    --  Just raises a test exception.
+
+   procedure Cleanup_Log_Error (Msg : String);
+   --  Raise only for a diagnostic emitted after manager interruption.
 
    procedure Raise_Delete_Error (Filename : String);
    --  Raise a deterministic socket deletion error.
@@ -201,6 +206,21 @@ package body Spawn.Pool.Tests is
          end if;
          raise;
    end Caller_Abort_Releases_Lease;
+
+   -------------------------------------------------------------------------
+
+   procedure Cleanup_Log_Error (Msg : String)
+   is
+   begin
+      if Ada.Strings.Fixed.Index (Source  => Msg,
+                                  Pattern => "terminated") > 0
+        or else Ada.Strings.Fixed.Index
+          (Source  => Msg,
+           Pattern => "Timeout occured") > 0
+      then
+         raise Test_Log_Exception;
+      end if;
+   end Cleanup_Log_Error;
 
    -------------------------------------------------------------------------
 
@@ -379,6 +399,37 @@ package body Spawn.Pool.Tests is
          Remove_Test_Directory;
          raise;
    end Cleanup_Socket_After_Delete_Error;
+
+   -------------------------------------------------------------------------
+
+   procedure Cleanup_Survives_Log_Error
+   is
+      Initialized : Boolean := False;
+   begin
+      Spawn.Pool.Init (Manager_Path => Manager_Path,
+                       Log          => Cleanup_Log_Error'Access);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+   exception
+      when others =>
+         if Initialized then
+            begin
+               Spawn.Pool.Cleanup;
+            exception
+               when others => null;
+            end;
+         end if;
+         raise;
+   end Cleanup_Survives_Log_Error;
 
    -------------------------------------------------------------------------
 
@@ -1123,6 +1174,9 @@ package body Spawn.Pool.Tests is
         (Routine => Pool_Depleted'Access,
          Name    => "Pool depleted");
       T.Add_Test_Routine
+        (Routine => Protocol_Failure_Poisons_Pool'Access,
+         Name    => "Poison pool after protocol failure");
+      T.Add_Test_Routine
         (Routine => Relative_Socket_Transport'Access,
          Name    => "Preserve short relative socket transport");
       T.Add_Test_Routine
@@ -1149,6 +1203,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Cleanup_Socket_After_Delete_Error'Access,
          Name    => "Continue cleanup after delete error");
+      T.Add_Test_Routine
+        (Routine => Cleanup_Survives_Log_Error'Access,
+         Name    => "Continue cleanup after log error");
       T.Add_Test_Routine
         (Routine => Log_A_File'Access,
          Name    => "Log file contents");
@@ -1540,6 +1597,51 @@ package body Spawn.Pool.Tests is
          end loop;
          raise;
    end Pool_Depleted;
+
+   -------------------------------------------------------------------------
+
+   procedure Protocol_Failure_Poisons_Pool
+   is
+      Request     : Protocol.Exec_Request_Type;
+      Result      : Protocol.Result_Type;
+      Initialized : Boolean := False;
+   begin
+      Request.Executable := To_Unbounded_String ("/bin/true");
+      Request.Directory := To_Unbounded_String ("/");
+
+      Spawn.Pool.Init (Manager_Path => Protocol_Failure_Manager_Path);
+      Initialized := True;
+      Result := Spawn.Pool.Execute (Request => Request);
+      Assert (Condition => Result.Kind = Protocol.Protocol_Failed,
+              Message   => "fake manager result was not protocol failure");
+
+      begin
+         Result := Spawn.Pool.Execute (Request => Request);
+         Fail (Message => "failed pool reused a manager");
+      exception
+         when E : Spawn.Pool.Pool_Error =>
+            Assert
+              (Condition => Ada.Exceptions.Exception_Message (X => E)
+                 = "spawn manager pool has failed",
+               Message   => "failed pool diagnostic differs");
+      end;
+
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         raise;
+   end Protocol_Failure_Poisons_Pool;
 
    -------------------------------------------------------------------------
 

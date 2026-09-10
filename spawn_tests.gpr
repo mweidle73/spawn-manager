@@ -10,7 +10,8 @@ project Spawn_Tests is
 
    for Main use ("test_runner.adb");
    for Source_Dirs use Spawn_Common.Source_Dirs & "tests";
-   for Excluded_Source_Files use ("spawn-posix-tests.c");
+   for Excluded_Source_Files use
+     ("protocol-failure-manager.c", "spawn-posix-tests.c");
 
    Compiler_Switches := Spawn_Common.Compiler_Switches & "-gnata" & "-gnatwal";
    Linker_Switches   := ();

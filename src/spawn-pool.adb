@@ -139,6 +139,7 @@ package body Spawn.Pool is
       Active_Count  : Natural := 0;
       Data          : SOMP.Map;
       Directory     : Unbounded_String;
+      Failed        : Boolean := False;
       Shutting_Down : Boolean := False;
    end Sockets;
 
@@ -189,6 +190,19 @@ package body Spawn.Pool is
       Snapshot       : SOMP.Map;
       Position       : SOMP.Cursor;
       Pool_Directory : Unbounded_String;
+
+      procedure Cleanup_Log (Msg : String);
+      --  Keep diagnostic callback failures outside lifecycle ownership.
+
+      procedure Cleanup_Log (Msg : String)
+      is
+      begin
+         if L /= null then
+            L (Msg => Msg);
+         end if;
+      exception
+         when others => null;
+      end Cleanup_Log;
    begin
       Sockets.Begin_Cleanup
         (Snapshot       => Snapshot,
@@ -207,15 +221,21 @@ package body Spawn.Pool is
                GNAT.Expect.Interrupt (Descriptor => Manager.Pid);
             exception
                when E : others =>
-                  L (Msg => "Unable to interrupt manager "
-                     & To_String (Manager.Address) & ": "
-                     & Ada.Exceptions.Exception_Message (X => E));
+                  Cleanup_Log
+                    (Msg => "Unable to interrupt manager "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
             end;
          end;
          SOMP.Next (Position => Position);
       end loop;
 
       Sockets.Wait_For_No_Active;
+
+      --  No caller owns a snapshot entry now. Clear protected state before
+      --  fallible descriptor and filesystem cleanup so no diagnostic or OS
+      --  error can leave the lifecycle permanently marked as shutting down.
+      Sockets.Finish_Cleanup;
 
       Position := Snapshot.First;
       while SOMP.Has_Element (Position => Position) loop
@@ -231,31 +251,75 @@ package body Spawn.Pool is
                   Timeout    => 3000);
             exception
                when GNAT.Expect.Process_Died =>
-                  L (Msg => "Manager " & To_String (Manager.Address)
-                     & " terminated");
-                  GNAT.Expect.Close (Descriptor => Manager.Pid);
+                  Cleanup_Log
+                    (Msg => "Manager " & To_String (Manager.Address)
+                       & " terminated");
+               when E : others =>
+                  Cleanup_Log
+                    (Msg => "Unable to wait for manager "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
             end;
 
             case Match is
                when GNAT.Expect.Expect_Timeout =>
-                  L (Msg => "Timeout occured, KILL manager "
-                     & To_String (Manager.Address));
-                  GNAT.Expect.Close (Descriptor => Manager.Pid);
+                  Cleanup_Log
+                    (Msg => "Timeout occured, KILL manager "
+                       & To_String (Manager.Address));
                when others => null;
             end case;
 
-            Manager.Socket.Close;
-            Remove_Socket_File
-              (Filename => To_String (Manager.Cleanup_Address));
-            Anet.OS.Delete_File
-              (Filename => To_String (Manager.Cleanup_Address) & ".log");
+            begin
+               GNAT.Expect.Close (Descriptor => Manager.Pid);
+            exception
+               when E : others =>
+                  Cleanup_Log
+                    (Msg => "Unable to close manager "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
+            end;
+            begin
+               Manager.Socket.Close;
+            exception
+               when E : others =>
+                  Cleanup_Log
+                    (Msg => "Unable to close manager socket "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
+            end;
+            begin
+               Remove_Socket_File
+                 (Filename => To_String (Manager.Cleanup_Address));
+            exception
+               when E : others =>
+                  Cleanup_Log
+                    (Msg => "Unable to remove manager socket "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
+            end;
+            begin
+               Anet.OS.Delete_File
+                 (Filename => To_String (Manager.Cleanup_Address) & ".log");
+            exception
+               when E : others =>
+                  Cleanup_Log
+                    (Msg => "Unable to remove manager log "
+                       & To_String (Manager.Address) & ": "
+                       & Ada.Exceptions.Exception_Message (X => E));
+            end;
             Free (X => Manager.Socket);
          end;
          SOMP.Next (Position => Position);
       end loop;
 
-      Sockets.Finish_Cleanup;
-      Remove_Pool_Directory (Path => To_String (Pool_Directory));
+      begin
+         Remove_Pool_Directory (Path => To_String (Pool_Directory));
+      exception
+         when E : others =>
+            Cleanup_Log
+              (Msg => "Unable to remove private socket directory: "
+                 & Ada.Exceptions.Exception_Message (X => E));
+      end;
    end Cleanup;
 
    -------------------------------------------------------------------------
@@ -390,6 +454,9 @@ package body Spawn.Pool is
                   Diagnostic => To_Unbounded_String
                     ("manager transport failed"));
          end;
+         if Result.Kind = Protocol.Protocol_Failed then
+            return Result;
+         end if;
          Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
          return Result;
       end;
@@ -453,6 +520,11 @@ package body Spawn.Pool is
             raise Command_Failed with
               "Manager transport failed for command: '" & Command & "'";
       end;
+
+      if Result.Kind = Protocol.Protocol_Failed then
+         raise Command_Failed with
+           "Manager protocol failed for command: '" & Command & "'";
+      end if;
 
       Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
 
@@ -823,6 +895,7 @@ package body Spawn.Pool is
             raise Program_Error with "invalid abandoned manager lease";
          end if;
          Active_Count := Active_Count - 1;
+         Failed := True;
          Lease.Active := False;
       end Abandon_Socket;
 
@@ -848,6 +921,7 @@ package body Spawn.Pool is
       begin
          Data.Clear;
          Directory := Null_Unbounded_String;
+         Failed := False;
          Shutting_Down := False;
       end Finish_Cleanup;
 
@@ -874,6 +948,9 @@ package body Spawn.Pool is
       begin
          if Shutting_Down then
             raise Pool_Error with "spawn manager pool is shutting down";
+         end if;
+         if Failed then
+            raise Pool_Error with "spawn manager pool has failed";
          end if;
          while SOMP.Has_Element (Position => Pos) loop
             Lease.Container := SOMP.Element (Position => Pos);
@@ -935,7 +1012,7 @@ package body Spawn.Pool is
          then
             raise Program_Error with "invalid released manager lease";
          end if;
-         if not Shutting_Down then
+         if not Shutting_Down and then not Failed then
             Data.Update_Element (Position => Pos,
                                  Process  => Set_Available'Access);
          end if;
