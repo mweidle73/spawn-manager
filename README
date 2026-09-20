@@ -121,6 +121,9 @@ reports pre-exec `errno`, waits for the exact status and owns timeout cleanup.
 Protocol handling, request construction, policy, diagnostics and pool state
 remain Ada. Comments in the C module document the operations which are safe
 between `fork` and `execve` and the ownership of every child cleanup path.
+Each C function states its local contract, while the child and parent execution
+paths label setup, containment, exec synchronization, wait, result and cleanup
+phases explicitly.
 
 Licence
 -------

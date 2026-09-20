@@ -80,6 +80,7 @@ struct child_error {
 	int error_number;
 };
 
+/* Initialize the complete result record for one terminal outcome. */
 static void set_result(
 	struct spawn_posix_result *result,
 	int kind,
@@ -95,6 +96,7 @@ static void set_result(
 	result->error_number = error_number;
 }
 
+/* Return CLOCK_MONOTONIC in milliseconds, or -1 when it cannot be read. */
 static int64_t monotonic_milliseconds(void)
 {
 	struct timespec now;
@@ -104,6 +106,11 @@ static int64_t monotonic_milliseconds(void)
 	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
 }
 
+/*
+ * Convert an absolute monotonic deadline to a poll timeout. A negative
+ * deadline remains unlimited, zero means expired, and large values are capped
+ * at the interface maximum accepted by poll(2).
+ */
 static int remaining_milliseconds(int64_t deadline)
 {
 	int64_t now;
@@ -166,11 +173,16 @@ static void report_child_error_to(int fd, int stage, int error_number)
 	_exit(127);
 }
 
+/* Report the current errno after the error pipe has been installed at fd 3. */
 static void report_child_error(int stage)
 {
 	report_child_error_to(ERROR_FD, stage, errno);
 }
 
+/*
+ * Install source as target. When both names already identify the same
+ * descriptor, clear FD_CLOEXEC instead of calling dup2(2).
+ */
 static int duplicate_to(int source, int target)
 {
 	if (source != target)
@@ -178,6 +190,7 @@ static int duplicate_to(int source, int target)
 	return fcntl(source, F_SETFD, 0);
 }
 
+/* Open one supported output mode without following the final path symlink. */
 static int open_output_file(int mode, const char *path)
 {
 	if (mode == SPAWN_POSIX_TRUNCATE_FILE)
@@ -188,6 +201,7 @@ static int open_output_file(int mode, const char *path)
 	return -1;
 }
 
+/* Clear the manager's inherited signal mask before executing the target. */
 static void reset_signal_mask(void)
 {
 	sigset_t mask;
@@ -197,6 +211,10 @@ static void reset_signal_mask(void)
 		report_child_error(SPAWN_POSIX_RESET_SIGNALS);
 }
 
+/*
+ * Close every descriptor above the dedicated error channel. Prefer the kernel
+ * range operation and fall back to the parent-prepared finite descriptor bound.
+ */
 static void close_child_descriptors(int highest_descriptor)
 {
 #ifdef SYS_close_range
@@ -233,6 +251,7 @@ static void child_exec(
 	int null_fd;
 	int output_fd;
 
+	/* Normalize the private pre-exec error channel to the fixed descriptor. */
 	(void)close(error_read_fd);
 	if (error_write_fd != ERROR_FD) {
 		if (dup2(error_write_fd, ERROR_FD) < 0) {
@@ -247,6 +266,8 @@ static void child_exec(
 		}
 		(void)close(error_write_fd);
 	}
+
+	/* Establish containment and couple the child lifetime to this manager. */
 	if (setpgid(0, 0) < 0)
 		report_child_error(SPAWN_POSIX_PROCESS_GROUP);
 	if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0)
@@ -256,6 +277,7 @@ static void child_exec(
 		report_child_error(SPAWN_POSIX_PARENT_DEATH);
 	}
 
+	/* Install the version-1 stdin, stdout and stderr contract. */
 	null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
 	if (null_fd < 0)
 		report_child_error(SPAWN_POSIX_OPEN_STDIN);
@@ -282,6 +304,7 @@ static void child_exec(
 	if (null_fd > STDERR_FILENO)
 		(void)close(null_fd);
 
+	/* Apply remaining process-local state, close private fds and exec once. */
 	if (directory[0] != '\0' && chdir(directory) < 0)
 		report_child_error(SPAWN_POSIX_CHANGE_DIRECTORY);
 	reset_signal_mask();
@@ -293,6 +316,10 @@ static void child_exec(
 	report_child_error(SPAWN_POSIX_EXEC);
 }
 
+/*
+ * Read one fixed child-error record. Return 1 for a complete record, 0 for
+ * pipe EOF, 2 when a nonblocking retry is needed and -1 for any invalid read.
+ */
 static int read_child_error(int fd, struct child_error *error)
 {
 	ssize_t count;
@@ -310,6 +337,7 @@ static int read_child_error(int fd, struct child_error *error)
 	return -1;
 }
 
+/* Open a Linux pidfd for deadline waits, or return -1 with syscall errno. */
 static int open_pidfd(pid_t pid)
 {
 #ifdef SYS_pidfd_open
@@ -351,6 +379,10 @@ static int wait_for_exec(
 	}
 }
 
+/*
+ * Wait for the request leader. Return 1 after reaping it, 0 at the deadline
+ * and -1 on a wait error. A pidfd avoids polling sleeps when Linux provides it.
+ */
 static int wait_for_leader(pid_t pid, int pidfd, int64_t deadline, int *status)
 {
 	if (deadline < 0) {
@@ -388,6 +420,7 @@ static int wait_for_leader(pid_t pid, int pidfd, int64_t deadline, int *status)
 	}
 }
 
+/* Return whether the request process group still has a visible member. */
 static int process_group_exists(pid_t group)
 {
 	if (kill(-group, 0) == 0)
@@ -395,6 +428,7 @@ static int process_group_exists(pid_t group)
 	return errno == EPERM;
 }
 
+/* Reap adopted group members until none remain or the deadline fails. */
 static int reap_group(pid_t group, int64_t deadline)
 {
 	struct timespec pause = { 0, POLL_SLICE_MS * 1000 * 1000 };
@@ -417,9 +451,10 @@ static int reap_group(pid_t group, int64_t deadline)
 }
 
 /*
- * A timeout is terminal only after the leader and all children which remained
- * in its request group have been killed and reaped. A setsid descendant is
- * outside this contract and requires the separately pending cgroup decision.
+ * Terminate one request group: allow a short SIGTERM grace period, SIGKILL
+ * survivors, then reap every adopted member. leader_reaped prevents a second
+ * wait for a leader already collected by the normal path. A setsid descendant
+ * is outside this contract and requires the separate cgroup policy.
  */
 static int terminate_group(
 	pid_t pid,
@@ -464,6 +499,10 @@ static int terminate_group(
 		pid, monotonic_milliseconds() + TERMINATION_GRACE_MS);
 }
 
+/*
+ * Async-signal-safe manager hook: kill the active request group and preserve
+ * the interrupted code's errno. Normal execution still owns all reaping.
+ */
 void spawn_posix_terminate_current(void)
 {
 	int saved_errno = errno;
@@ -508,6 +547,11 @@ int spawn_posix_execute(
 	pid_t parent_pid = getpid();
 	struct child_error child_error = { 0, 0 };
 
+	/*
+	 * Phase 1: prepare manager-side supervision before a child exists. The
+	 * subreaper, error channel and fallback descriptor ceiling are shared by
+	 * every later phase but never become request policy.
+	 */
 	set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 		SPAWN_POSIX_NO_FAILURE, 0);
 	if (!subreaper_enabled) {
@@ -535,6 +579,10 @@ int spawn_posix_execute(
 	}
 	highest_descriptor = descriptor_ceiling;
 
+	/*
+	 * Phase 2: fork exactly once, then establish the request process group in
+	 * both participants so scheduling cannot leave the child uncontained.
+	 */
 	pid = fork();
 	if (pid == 0)
 		child_exec(parent_pid, error_pipe[0], error_pipe[1], executable,
@@ -558,6 +606,11 @@ int spawn_posix_execute(
 			SPAWN_POSIX_PROCESS_GROUP, saved_errno);
 		goto cleanup;
 	}
+
+	/*
+	 * Phase 3: prepare efficient leader waiting and one overflow-safe monotonic
+	 * deadline. Unlimited requests deliberately skip pidfd deadline handling.
+	 */
 	if (timeout_ms >= 0) {
 		pidfd = open_pidfd(pid);
 		if (pidfd < 0 && errno != ENOSYS && errno != EINVAL) {
@@ -576,6 +629,10 @@ int spawn_posix_execute(
 		: timeout_ms > INT64_MAX - started ? INT64_MAX
 		: started + timeout_ms;
 
+	/*
+	 * Phase 4: cross the exec barrier. EOF means FD_CLOEXEC observed a successful
+	 * exec, a record is a precise pre-exec failure, and zero is the child timeout.
+	 */
 	switch (wait_for_exec(error_pipe[0], deadline, &child_error)) {
 	case 2:
 		{
@@ -611,6 +668,7 @@ int spawn_posix_execute(
 		goto cleanup;
 	}
 
+	/* Phase 5: wait for the executed leader or turn its deadline into timeout. */
 	if (!leader_reaped) {
 		int waited = wait_for_leader(pid, pidfd, deadline, &status);
 		if (waited == 0) {
@@ -632,6 +690,10 @@ int spawn_posix_execute(
 		leader_reaped = 1;
 	}
 
+	/*
+	 * A fast child may exit before the exec barrier was drained completely.
+	 * Consume a late fixed error record before trusting its wait status.
+	 */
 	{
 		int exec_state = read_child_error(error_pipe[0], &child_error);
 		if (exec_state == 1) {
@@ -646,6 +708,7 @@ int spawn_posix_execute(
 		}
 	}
 
+	/* Translate the exact wait status only after pre-exec failure is excluded. */
 	if (WIFEXITED(status))
 		set_result(result, SPAWN_POSIX_EXITED, WEXITSTATUS(status), 0,
 			SPAWN_POSIX_NO_FAILURE, 0);
@@ -656,12 +719,17 @@ int spawn_posix_execute(
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_WAIT, EPROTO);
 
+	/*
+	 * Phase 6: a terminal leader may leave descendants in its group. Terminate
+	 * and reap them before allowing that leader result to cross the boundary.
+	 */
 	if (process_group_exists(pid)
 	    && terminate_group(pid, pidfd, &status, 1) < 0)
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 
 cleanup:
+	/* Close parent descriptors and contain failures through one ownership exit. */
 	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !leader_reaped)
 		(void)terminate_group(pid, pidfd, &status, 0);
 	active_group = 0;

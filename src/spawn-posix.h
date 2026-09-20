@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 
+/* Stable result values shared with the explicit Ada/C translation. */
 enum spawn_posix_result_kind {
 	SPAWN_POSIX_EXITED = 0,
 	SPAWN_POSIX_SIGNALED = 1,
@@ -33,6 +34,7 @@ enum spawn_posix_result_kind {
 	SPAWN_POSIX_INTERNAL_ERROR = 4
 };
 
+/* Stable failure stages; keep these values aligned with the Ada mapping. */
 enum spawn_posix_failure_stage {
 	SPAWN_POSIX_NO_FAILURE = 0,
 	SPAWN_POSIX_ENABLE_SUBREAPER = 1,
@@ -54,11 +56,13 @@ enum spawn_posix_failure_stage {
 	SPAWN_POSIX_TERMINATE_GROUP = 17
 };
 
+/* Output policies accepted by the version-1 normalized launch request. */
 enum spawn_posix_stream_mode {
 	SPAWN_POSIX_NULL_STREAM = 0,
 	SPAWN_POSIX_TRUNCATE_FILE = 1
 };
 
+/* Complete result written on every return from spawn_posix_execute. */
 struct spawn_posix_result {
 	int kind;
 	int exit_status;
