@@ -131,7 +131,7 @@ package body Spawn_Manager_Processes is
         (Executable      => Request.Executable,
          Arguments       => Arguments,
          Environment     => Environment,
-         Environment_Use => Replace,
+         Environment_Policy => Replace,
          Directory       => Request.Directory,
          Standard_Output => Convert (Request.Standard_Output),
          Standard_Error  => Convert (Request.Standard_Error),
@@ -156,7 +156,7 @@ package body Spawn_Manager_Processes is
         (Executable      => US.To_Unbounded_String (Shell),
          Arguments       => Arguments,
          Environment     => Environment_Vectors.Empty_Vector,
-         Environment_Use => Inherit,
+         Environment_Policy => Inherit,
          Directory       => US.To_Unbounded_String (Directory),
          Standard_Output => (Mode => Null_Stream, Path => <>),
          Standard_Error  => (Mode => Null_Stream, Path => <>),
@@ -190,7 +190,9 @@ package body Spawn_Manager_Processes is
 
    function Execute (Request : Execution_Request) return Execution_Result
    is
-      Argument_Count : constant Natural
+      Executable_Value : constant String := US.To_String (Request.Executable);
+      Directory_Value  : constant String := US.To_String (Request.Directory);
+      Argument_Count   : constant Natural
         := Natural (Request.Arguments.Length);
       Environment_Count : constant Natural
         := Natural (Request.Environment.Length);
@@ -204,10 +206,28 @@ package body Spawn_Manager_Processes is
       Stdout_Path : CS.chars_ptr := CS.Null_Ptr;
       Stderr_Path : CS.chars_ptr := CS.Null_Ptr;
       Raw_Result  : aliased C_Result := (others => 0);
-      Return_Code : C.int;
+      Ignored_Return_Code : C.int;
 
       procedure Free_Inputs;
       --  Release every C string allocated while translating Request.
+
+      procedure Marshal_Arguments;
+      --  Validate and allocate argv entries after the executable at index 0.
+
+      procedure Marshal_Environment;
+      --  Validate and allocate the replacement envp entries.
+
+      function Marshal_Stream
+        (Stream : Stream_Specification;
+         Name   : String)
+         return CS.chars_ptr;
+      --  Allocate an absolute output path, or return null for /dev/null.
+
+      function To_Result return Execution_Result;
+      --  Validate C discriminants and translate the result to Ada.
+
+      procedure Validate_Request;
+      --  Validate fields which do not allocate their C representation.
 
       procedure Free_Inputs
       is
@@ -236,8 +256,65 @@ package body Spawn_Manager_Processes is
          end if;
       end Free_Inputs;
 
-      function To_Result return Execution_Result;
-      --  Validate C discriminants and translate the result to Ada.
+      procedure Marshal_Arguments
+      is
+      begin
+         for Index in 1 .. Argument_Count loop
+            declare
+               Value : constant String
+                 := Request.Arguments.Element (Positive (Index));
+            begin
+               Require_C_String (Value => Value, Name => "argument");
+               C_Arguments (Index) := CS.New_String (Value);
+            end;
+         end loop;
+      end Marshal_Arguments;
+
+      procedure Marshal_Environment
+      is
+      begin
+         for Index in 1 .. Environment_Count loop
+            declare
+               Item : constant Environment_Entry
+                 := Request.Environment.Element (Positive (Index));
+               Item_Name  : constant String := US.To_String (Item.Name);
+               Item_Value : constant String := US.To_String (Item.Value);
+            begin
+               Require_C_String
+                 (Value => Item_Name,
+                  Name  => "environment name");
+               Require_C_String
+                 (Value => Item_Value,
+                  Name  => "environment value");
+               if Item_Name'Length = 0
+                 or else Ada.Strings.Fixed.Index
+                   (Source  => Item_Name,
+                    Pattern => "=") /= 0
+               then
+                  raise Constraint_Error with "invalid environment name";
+               end if;
+               C_Environment (Index - 1) := CS.New_String
+                 (Item_Name & "=" & Item_Value);
+            end;
+         end loop;
+      end Marshal_Environment;
+
+      function Marshal_Stream
+        (Stream : Stream_Specification;
+         Name   : String)
+         return CS.chars_ptr
+      is
+      begin
+         if Stream.Mode = Null_Stream then
+            return CS.Null_Ptr;
+         end if;
+         declare
+            Value : constant String := US.To_String (Stream.Path);
+         begin
+            Require_Absolute (Value => Value, Name => Name);
+            return CS.New_String (Value);
+         end;
+      end Marshal_Stream;
 
       function To_Result return Execution_Result
       is
@@ -262,81 +339,47 @@ package body Spawn_Manager_Processes is
             Error_Number  => Natural (Raw_Result.Error_Number));
       end To_Result;
 
-      Executable_Value : constant String := US.To_String (Request.Executable);
-      Directory_Value  : constant String := US.To_String (Request.Directory);
+      procedure Validate_Request
+      is
+      begin
+         Require_Absolute (Value => Executable_Value, Name => "executable");
+         if Request.Environment_Policy = Replace then
+            Require_Absolute (Value => Directory_Value, Name => "directory");
+         else
+            --  The compatible shell request historically accepts a relative
+            --  directory; the C core interprets it from the manager's cwd.
+            Require_C_String (Value => Directory_Value, Name => "directory");
+         end if;
+         if Request.Timeout_MS < -1 then
+            raise Constraint_Error with "timeout must be -1 or nonnegative";
+         end if;
+         if Request.Environment_Policy = Inherit
+           and then not Request.Environment.Is_Empty
+         then
+            raise Constraint_Error with
+              "inherited environment must not contain entries";
+         end if;
+      end Validate_Request;
    begin
-      Require_Absolute (Value => Executable_Value, Name => "executable");
-      if Request.Environment_Use = Replace then
-         Require_Absolute (Value => Directory_Value, Name => "directory");
-      else
-         Require_C_String (Value => Directory_Value, Name => "directory");
-      end if;
-      if Request.Timeout_MS < -1 then
-         raise Constraint_Error with "timeout must be -1 or nonnegative";
-      end if;
-      if Request.Environment_Use = Inherit
-        and then not Request.Environment.Is_Empty
-      then
-         raise Constraint_Error with
-           "inherited environment must not contain entries";
-      end if;
+      Validate_Request;
 
       Executable := CS.New_String (Executable_Value);
       Directory := CS.New_String (Directory_Value);
       C_Arguments (0) := CS.New_String (Executable_Value);
-      for Index in 1 .. Argument_Count loop
-         declare
-            Value : constant String
-              := Request.Arguments.Element (Positive (Index));
-         begin
-            Require_C_String (Value => Value, Name => "argument");
-            C_Arguments (Index) := CS.New_String (Value);
-         end;
-      end loop;
+      Marshal_Arguments;
+      Marshal_Environment;
+      Stdout_Path := Marshal_Stream
+        (Stream => Request.Standard_Output,
+         Name   => "stdout path");
+      Stderr_Path := Marshal_Stream
+        (Stream => Request.Standard_Error,
+         Name   => "stderr path");
 
-      for Index in 1 .. Environment_Count loop
-         declare
-            Item  : constant Environment_Entry
-              := Request.Environment.Element (Positive (Index));
-            Name  : constant String := US.To_String (Item.Name);
-            Value : constant String := US.To_String (Item.Value);
-         begin
-            Require_C_String (Value => Name, Name => "environment name");
-            Require_C_String (Value => Value, Name => "environment value");
-            if Name'Length = 0
-              or else Ada.Strings.Fixed.Index (Source => Name, Pattern => "=")
-                /= 0
-            then
-               raise Constraint_Error with "invalid environment name";
-            end if;
-            C_Environment (Index - 1) := CS.New_String (Name & "=" & Value);
-         end;
-      end loop;
-
-      if Request.Standard_Output.Mode = Truncate_File then
-         declare
-            Value : constant String
-              := US.To_String (Request.Standard_Output.Path);
-         begin
-            Require_Absolute (Value => Value, Name => "stdout path");
-            Stdout_Path := CS.New_String (Value);
-         end;
-      end if;
-      if Request.Standard_Error.Mode = Truncate_File then
-         declare
-            Value : constant String
-              := US.To_String (Request.Standard_Error.Path);
-         begin
-            Require_Absolute (Value => Value, Name => "stderr path");
-            Stderr_Path := CS.New_String (Value);
-         end;
-      end if;
-
-      Return_Code := C_Execute
+      Ignored_Return_Code := C_Execute
         (Executable          => Executable,
          Arguments           => C_Arguments'Address,
          Inherit_Environment => To_C_Environment_Mode
-           (Mode => Request.Environment_Use),
+           (Mode => Request.Environment_Policy),
          Environment         => C_Environment'Address,
          Directory           => Directory,
          Stdout_Mode         => To_C_Stream_Mode
@@ -349,7 +392,7 @@ package body Spawn_Manager_Processes is
          Result              => Raw_Result'Access);
       --  The C return value only distinguishes its Internal_Error variant;
       --  Raw_Result remains the single detailed result translated below.
-      pragma Unreferenced (Return_Code);
+      pragma Unreferenced (Ignored_Return_Code);
 
       Free_Inputs;
       return To_Result;

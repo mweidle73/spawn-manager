@@ -35,7 +35,7 @@ with Spawn.Logger;
 
 package body Spawn.Signals is
 
-   package L renames Spawn.Logger;
+   package Logger renames Spawn.Logger;
 
    procedure Terminate_Current
      with Import,
@@ -52,12 +52,14 @@ package body Spawn.Signals is
       procedure Handle_Signal
       is
       begin
-         pragma Debug (L.Log_File ("Signal received - shutting down"));
+         pragma Debug
+           (Logger.Log_File ("Signal received - shutting down"));
          Socket_L.Close;
          Socket_C.Close;
          if Running then
             pragma Debug
-              (L.Log_File ("Active request still running, terminating group"));
+              (Logger.Log_File
+                 ("Active request still running, terminating group"));
             Terminate_Current;
          end if;
          GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));

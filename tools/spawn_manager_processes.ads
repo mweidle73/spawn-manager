@@ -30,6 +30,11 @@ with Spawn.Protocol;
 
 package Spawn_Manager_Processes is
 
+   --  This package is the typed Ada side of the single POSIX execution
+   --  boundary. It normalizes both wire request variants, validates every
+   --  value which will cross into C and translates the result back without
+   --  exposing C representation choices to the manager loop.
+
    package String_Vectors is new Ada.Containers.Indefinite_Vectors
      (Index_Type   => Positive,
       Element_Type => String);
@@ -59,7 +64,7 @@ package Spawn_Manager_Processes is
       Executable      : Ada.Strings.Unbounded.Unbounded_String;
       Arguments       : String_Vectors.Vector;
       Environment     : Environment_Vectors.Vector;
-      Environment_Use : Environment_Mode := Replace;
+      Environment_Policy : Environment_Mode := Replace;
       Directory       : Ada.Strings.Unbounded.Unbounded_String;
       Standard_Output : Stream_Specification;
       Standard_Error  : Stream_Specification;
