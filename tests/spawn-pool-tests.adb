@@ -122,8 +122,18 @@ package body Spawn.Pool.Tests is
    procedure Cleanup_Log_Error (Msg : String);
    --  Raise only for a diagnostic emitted after manager interruption.
 
+   Ready_Log_Attempts : Natural := 0;
+   --  Count injected failures after a manager enters the pool.
+
+   Ready_Log_Path : constant String := "obj/ready-log-reuse.out";
+   Ready_Log_File : Ada.Text_IO.File_Type;
+   --  Hold one descriptor allocated between local and pool cleanup.
+
    procedure Raise_Delete_Error (Filename : String);
    --  Raise a deterministic socket deletion error.
+
+   procedure Ready_Log_Error (Msg : String);
+   --  Raise when initialization reports a manager as ready for use.
 
    -------------------------------------------------------------------------
 
@@ -234,7 +244,7 @@ package body Spawn.Pool.Tests is
                                   Pattern => "terminated") > 0
         or else Ada.Strings.Fixed.Index
           (Source  => Msg,
-           Pattern => "Timeout occured") > 0
+           Pattern => "Timeout occurred") > 0
       then
          Cleanup_Log_Attempts := Cleanup_Log_Attempts + 1;
          raise Test_Log_Exception;
@@ -1189,6 +1199,9 @@ package body Spawn.Pool.Tests is
         (Routine => Failed_Init_Cleanup'Access,
          Name    => "Clean failed manager initialization");
       T.Add_Test_Routine
+        (Routine => Registered_Manager_Log_Failure_Cleanup'Access,
+         Name    => "Clean registered manager after ready log failure");
+      T.Add_Test_Routine
         (Routine => Parallel_Execution'Access,
          Name    => "Parallel execution");
       T.Add_Test_Routine
@@ -1710,6 +1723,97 @@ package body Spawn.Pool.Tests is
    begin
       raise Anet.OS.IO_Error with "injected delete failure";
    end Raise_Delete_Error;
+
+   -------------------------------------------------------------------------
+
+   procedure Ready_Log_Error (Msg : String)
+   is
+   begin
+      Test_Buffer := Test_Buffer & Msg & ASCII.LF;
+      if Ada.Strings.Fixed.Index
+        (Source  => Msg,
+         Pattern => "terminated") > 0
+        and then not Ada.Text_IO.Is_Open (Ready_Log_File)
+      then
+         Ada.Text_IO.Create
+           (File => Ready_Log_File,
+            Name => Ready_Log_Path);
+      end if;
+      if Ada.Strings.Fixed.Index
+        (Source  => Msg,
+         Pattern => " ready") > 0
+      then
+         Ready_Log_Attempts := Ready_Log_Attempts + 1;
+         raise Test_Log_Exception;
+      end if;
+   end Ready_Log_Error;
+
+   -------------------------------------------------------------------------
+
+   procedure Registered_Manager_Log_Failure_Cleanup
+   is
+      Initialized : Boolean := False;
+   begin
+      Ready_Log_Attempts := 0;
+      Test_Buffer := Null_Unbounded_String;
+      if Ada.Directories.Exists (Name => Ready_Log_Path) then
+         Ada.Directories.Delete_File (Name => Ready_Log_Path);
+      end if;
+      begin
+         Spawn.Pool.Init
+           (Manager_Path => Manager_Path,
+            Log          => Ready_Log_Error'Access);
+         Initialized := True;
+         Fail (Message => "ready-log failure was not propagated");
+      exception
+         when Test_Log_Exception => null;
+      end;
+      Assert (Condition => Ready_Log_Attempts = 1,
+              Message   => "ready-log failure was not injected exactly once");
+      Assert
+        (Condition => Ada.Strings.Fixed.Index
+           (Source  => To_String (Test_Buffer),
+            Pattern => "Unable to") = 0,
+         Message   => "registered manager was cleaned through local owner");
+      Assert (Condition => Ada.Text_IO.Is_Open (Ready_Log_File),
+              Message   => "cleanup did not expose descriptor reuse window");
+      Ada.Text_IO.Put_Line (File => Ready_Log_File, Item => "still open");
+      Ada.Text_IO.Flush (File => Ready_Log_File);
+      Ada.Text_IO.Close (File => Ready_Log_File);
+      Ada.Directories.Delete_File (Name => Ready_Log_Path);
+
+      --  Failed Init owns cleanup of the already registered manager. A fresh
+      --  pool and request prove that no stale map entry or descriptor remains.
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+      Ready_Log_Attempts := 0;
+      Test_Buffer := Null_Unbounded_String;
+   exception
+      when others =>
+         if Ada.Text_IO.Is_Open (Ready_Log_File) then
+            begin
+               Ada.Text_IO.Close (File => Ready_Log_File);
+            exception
+               when others => null;
+            end;
+         end if;
+         if Ada.Directories.Exists (Name => Ready_Log_Path) then
+            Ada.Directories.Delete_File (Name => Ready_Log_Path);
+         end if;
+         if Initialized then
+            begin
+               Spawn.Pool.Cleanup;
+            exception
+               when others => null;
+            end;
+         end if;
+         Ready_Log_Attempts := 0;
+         Test_Buffer := Null_Unbounded_String;
+         raise;
+   end Registered_Manager_Log_Failure_Cleanup;
 
    -------------------------------------------------------------------------
 

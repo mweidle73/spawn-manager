@@ -126,6 +126,9 @@ package Spawn.Pool.Tests is
    procedure Cleanup_Survives_Log_Error;
    --  Verify a failing cleanup diagnostic cannot lock the pool lifecycle.
 
+   procedure Registered_Manager_Log_Failure_Cleanup;
+   --  Verify a ready-log failure leaves registered-manager cleanup pool-owned.
+
    procedure Log_A_File;
    --  Test Log_A_File procedure;
 

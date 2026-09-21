@@ -612,8 +612,7 @@ package body Spawn.Pool is
       procedure Connect_And_Register
         (Pid             : GNAT.Expect.Process_Descriptor;
          Address         : String;
-         Cleanup_Address : String;
-         Registered      : out Boolean);
+         Cleanup_Address : String);
       --  Connect one started manager and transfer its socket into the pool.
 
       procedure Start_Manager
@@ -624,12 +623,11 @@ package body Spawn.Pool is
       procedure Connect_And_Register
         (Pid             : GNAT.Expect.Process_Descriptor;
          Address         : String;
-         Cleanup_Address : String;
-         Registered      : out Boolean)
+         Cleanup_Address : String)
       is
-         Socket : Socket_Handle := new Anet.Sockets.Unix.TCP_Socket_Type;
+         Socket   : Socket_Handle := new Anet.Sockets.Unix.TCP_Socket_Type;
+         Inserted : Boolean := False;
       begin
-         Registered := False;
          Socket.Init;
          Spawn.Transport.Set_Close_On_Exec
            (Descriptor => Socket.Get_Socket);
@@ -645,11 +643,10 @@ package body Spawn.Pool is
                Pid            => Pid,
                Socket         => Socket,
                Available      => True));
-         Registered := True;
-         Pool_Log (Msg => "Socket " & Address & " ready");
+         Inserted := True;
       exception
          when others =>
-            if not Registered then
+            if not Inserted then
                begin
                   Socket.Close;
                exception
@@ -753,8 +750,12 @@ package body Spawn.Pool is
          Connect_And_Register
            (Pid             => Pid,
             Address         => Address,
-            Cleanup_Address => Cleanup_Address,
-            Registered      => Registered);
+            Cleanup_Address => Cleanup_Address);
+         --  From this point the protected pool owns the manager. Set the
+         --  surrounding flag before invoking the fallible user callback so
+         --  unwind cleanup cannot treat the registered manager as local.
+         Registered := True;
+         Pool_Log (Msg => "Socket " & Address & " ready");
       exception
          when others =>
             if Arguments /= null then
