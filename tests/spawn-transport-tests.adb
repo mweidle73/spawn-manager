@@ -46,15 +46,17 @@ package body Spawn.Transport.Tests is
      with Import,
           Convention    => C,
           External_Name => "close";
+   --  Close one raw fixture descriptor.
 
    function C_Fcntl
      (Descriptor : C.int;
       Command    : C.int;
       Argument   : C.int)
       return C.int
-     with Import,
-          Convention    => C,
-          External_Name => "fcntl";
+      with Import,
+           Convention    => C,
+           External_Name => "fcntl";
+   --  Read or update flags on one raw fixture descriptor.
 
    function C_Send
      (Descriptor : C.int;
@@ -62,9 +64,10 @@ package body Spawn.Transport.Tests is
       Length     : C.size_t;
       Flags      : C.int)
       return C.long
-     with Import,
-          Convention    => C,
-          External_Name => "send";
+      with Import,
+           Convention    => C,
+           External_Name => "send";
+   --  Send fixture bytes without exercising Spawn.Transport.
 
    function C_Socketpair
      (Domain      : C.int;
@@ -72,9 +75,10 @@ package body Spawn.Transport.Tests is
       Protocol    : C.int;
       Descriptors : System.Address)
       return C.int
-     with Import,
-          Convention    => C,
-          External_Name => "socketpair";
+      with Import,
+           Convention    => C,
+           External_Name => "socketpair";
+   --  Create the local descriptor pair used by transport tests.
 
    function C_Setsockopt
      (Descriptor : C.int;
@@ -83,9 +87,10 @@ package body Spawn.Transport.Tests is
       Value      : System.Address;
       Length     : C.unsigned)
       return C.int
-     with Import,
-          Convention    => C,
-          External_Name => "setsockopt";
+      with Import,
+           Convention    => C,
+           External_Name => "setsockopt";
+   --  Constrain a fixture socket option through the native interface.
 
    Test_Frame : constant Ada.Streams.Stream_Element_Array (1 .. 13)
      := (16#53#, 16#50#, 16#57#, 16#4e#,
@@ -93,13 +98,22 @@ package body Spawn.Transport.Tests is
          16#00#, 16#00#, 16#00#, 16#01#,
          16#02#);
 
-   procedure Z_Close_Pair (Descriptors : in out Descriptor_Array);
-   procedure Z_Open_Pair (Descriptors : out Descriptor_Array);
-   procedure Z_Raw_Send
+   procedure Close_Pair (Descriptors : in out Descriptor_Array);
+   --  Close both fixture descriptors, including partially opened pairs.
+
+   procedure Open_Pair (Descriptors : out Descriptor_Array);
+   --  Create one nonblocking local stream-socket pair.
+
+   procedure Raw_Send
      (Descriptor : C.int;
       Data       : Ada.Streams.Stream_Element_Array);
-   procedure Z_Set_Nonblocking (Descriptor : C.int);
-   procedure Z_Set_Send_Buffer (Descriptor : C.int; Size : Positive);
+   --  Send all fixture bytes without using the transport under test.
+
+   procedure Set_Nonblocking (Descriptor : C.int);
+   --  Enable nonblocking mode on one fixture descriptor.
+
+   procedure Set_Send_Buffer (Descriptor : C.int; Size : Positive);
+   --  Constrain one fixture send buffer to force partial writes.
 
    procedure Close_On_Exec_Flag
    is
@@ -107,7 +121,7 @@ package body Spawn.Transport.Tests is
       Descriptors : Descriptor_Array;
       Flags       : C.int;
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       Set_Close_On_Exec (Descriptor => Descriptors (0));
       Flags := C_Fcntl
         (Descriptor => Descriptors (0),
@@ -115,12 +129,27 @@ package body Spawn.Transport.Tests is
          Argument   => 0);
       Assert (Condition => Flags >= 0 and then Flags mod 2 = 1,
               Message   => "close-on-exec flag not set");
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Close_On_Exec_Flag;
+
+   -------------------------------------------------------------------------
+
+   procedure Close_Pair (Descriptors : in out Descriptor_Array)
+   is
+      Ignored : C.int;
+      pragma Unreferenced (Ignored);
+   begin
+      for Descriptor of Descriptors loop
+         if Descriptor >= 0 then
+            Ignored := C_Close (Descriptor => Descriptor);
+            Descriptor := -1;
+         end if;
+      end loop;
+   end Close_Pair;
 
    -------------------------------------------------------------------------
 
@@ -137,18 +166,18 @@ package body Spawn.Transport.Tests is
       is
       begin
          accept Start;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0),
             Data       => Test_Frame (1 .. 1));
          delay 0.100;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0),
             Data       => Test_Frame (2 .. Test_Frame'Last));
       exception
          when others => Writer_Failed := True;
       end Writer;
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       Writer.Start;
       begin
          declare
@@ -170,13 +199,13 @@ package body Spawn.Transport.Tests is
       end if;
       Assert (Condition => not Writer_Failed,
               Message   => "fragment writer failed");
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
          if not Writer'Terminated then
             abort Writer;
          end if;
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Completion_Timeout;
 
@@ -188,9 +217,9 @@ package body Spawn.Transport.Tests is
       Extra       : constant Ada.Streams.Stream_Element_Array (1 .. 1)
         := (1 => 0);
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
-      Z_Raw_Send (Descriptor => Descriptors (0), Data => Test_Frame);
-      Z_Raw_Send (Descriptor => Descriptors (0), Data => Extra);
+      Open_Pair (Descriptors => Descriptors);
+      Raw_Send (Descriptor => Descriptors (0), Data => Test_Frame);
+      Raw_Send (Descriptor => Descriptors (0), Data => Extra);
       begin
          declare
             Ignored : constant Ada.Streams.Stream_Element_Array
@@ -204,10 +233,10 @@ package body Spawn.Transport.Tests is
       exception
          when Extra_Data => null;
       end;
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Extra_Data_Is_Rejected;
 
@@ -217,7 +246,7 @@ package body Spawn.Transport.Tests is
    is
       Descriptors : Descriptor_Array;
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       begin
          declare
             Ignored : constant Ada.Streams.Stream_Element_Array
@@ -232,10 +261,10 @@ package body Spawn.Transport.Tests is
       exception
          when Transport_Timeout => null;
       end;
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end First_Byte_Timeout;
 
@@ -254,22 +283,22 @@ package body Spawn.Transport.Tests is
       is
       begin
          accept Start;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0), Data => Test_Frame (1 .. 1));
          delay 0.010;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0), Data => Test_Frame (2 .. 5));
          delay 0.010;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0), Data => Test_Frame (6 .. 12));
          delay 0.010;
-         Z_Raw_Send
+         Raw_Send
            (Descriptor => Descriptors (0), Data => Test_Frame (13 .. 13));
       exception
          when others => Writer_Failed := True;
       end Writer;
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       Writer.Start;
       declare
          Frame : constant Ada.Streams.Stream_Element_Array
@@ -284,13 +313,13 @@ package body Spawn.Transport.Tests is
       end;
       Assert (Condition => not Writer_Failed,
               Message   => "fragment writer failed");
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
          if not Writer'Terminated then
             abort Writer;
          end if;
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Fragmented_Frame;
 
@@ -328,13 +357,31 @@ package body Spawn.Transport.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Open_Pair (Descriptors : out Descriptor_Array)
+   is
+   begin
+      Descriptors := (others => -1);
+      if C_Socketpair
+        (Domain      => Anet.Constants.Sys.AF_UNIX,
+         Socket_Type => Anet.Constants.Sys.SOCK_STREAM,
+         Protocol    => 0,
+         Descriptors => Descriptors'Address) /= 0
+      then
+         raise Program_Error with "socketpair failed";
+      end if;
+      Set_Nonblocking (Descriptor => Descriptors (0));
+      Set_Nonblocking (Descriptor => Descriptors (1));
+   end Open_Pair;
+
+   -------------------------------------------------------------------------
+
    procedure Peer_Closure
    is
       Descriptors : Descriptor_Array;
       Ignored     : C.int;
       pragma Unreferenced (Ignored);
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       Ignored := C_Close (Descriptor => Descriptors (0));
       Descriptors (0) := -1;
       begin
@@ -351,12 +398,29 @@ package body Spawn.Transport.Tests is
       exception
          when Peer_Closed => null;
       end;
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Peer_Closure;
+
+   -------------------------------------------------------------------------
+
+   procedure Raw_Send
+     (Descriptor : C.int;
+      Data       : Ada.Streams.Stream_Element_Array)
+   is
+      Sent : constant C.long := C_Send
+        (Descriptor => Descriptor,
+         Buffer     => Data'Address,
+         Length     => Data'Length,
+         Flags      => Anet.Constants.Sys.MSG_NOSIGNAL);
+   begin
+      if Sent /= Data'Length then
+         raise Program_Error with "test fragment send was incomplete";
+      end if;
+   end Raw_Send;
 
    -------------------------------------------------------------------------
 
@@ -364,7 +428,7 @@ package body Spawn.Transport.Tests is
    is
       Descriptors : Descriptor_Array;
    begin
-      Z_Open_Pair (Descriptors => Descriptors);
+      Open_Pair (Descriptors => Descriptors);
       Send_Frame (Descriptor => Descriptors (0), Data => Test_Frame);
       declare
          Frame : constant Ada.Streams.Stream_Element_Array
@@ -375,10 +439,10 @@ package body Spawn.Transport.Tests is
          Assert (Condition => Frame = Test_Frame,
                  Message   => "transported frame differs");
       end;
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Send_And_Receive;
 
@@ -425,8 +489,8 @@ package body Spawn.Transport.Tests is
            (Kind           => Spawn.Protocol.Result_Message,
             Payload_Length => Payload_Length),
          Data   => Frame);
-      Z_Open_Pair (Descriptors => Descriptors);
-      Z_Set_Send_Buffer (Descriptor => Descriptors (0), Size => 1_024);
+      Open_Pair (Descriptors => Descriptors);
+      Set_Send_Buffer (Descriptor => Descriptors (0), Size => 1_024);
       Reader.Start;
       Send_Frame
         (Descriptor => Descriptors (0),
@@ -437,69 +501,19 @@ package body Spawn.Transport.Tests is
               Message   => "large-frame reader failed");
       Assert (Condition => Reader_Matches,
               Message   => "large transported frame differs");
-      Z_Close_Pair (Descriptors => Descriptors);
+      Close_Pair (Descriptors => Descriptors);
    exception
       when others =>
          if not Reader'Terminated then
             abort Reader;
          end if;
-         Z_Close_Pair (Descriptors => Descriptors);
+         Close_Pair (Descriptors => Descriptors);
          raise;
    end Send_Large_Frame;
 
    -------------------------------------------------------------------------
 
-   procedure Z_Close_Pair (Descriptors : in out Descriptor_Array)
-   is
-      Ignored : C.int;
-      pragma Unreferenced (Ignored);
-   begin
-      for Descriptor of Descriptors loop
-         if Descriptor >= 0 then
-            Ignored := C_Close (Descriptor => Descriptor);
-            Descriptor := -1;
-         end if;
-      end loop;
-   end Z_Close_Pair;
-
-   -------------------------------------------------------------------------
-
-   procedure Z_Open_Pair (Descriptors : out Descriptor_Array)
-   is
-   begin
-      Descriptors := (others => -1);
-      if C_Socketpair
-        (Domain      => Anet.Constants.Sys.AF_UNIX,
-         Socket_Type => Anet.Constants.Sys.SOCK_STREAM,
-         Protocol    => 0,
-         Descriptors => Descriptors'Address) /= 0
-      then
-         raise Program_Error with "socketpair failed";
-      end if;
-      Z_Set_Nonblocking (Descriptor => Descriptors (0));
-      Z_Set_Nonblocking (Descriptor => Descriptors (1));
-   end Z_Open_Pair;
-
-   -------------------------------------------------------------------------
-
-   procedure Z_Raw_Send
-     (Descriptor : C.int;
-      Data       : Ada.Streams.Stream_Element_Array)
-   is
-      Sent : constant C.long := C_Send
-        (Descriptor => Descriptor,
-         Buffer     => Data'Address,
-         Length     => Data'Length,
-         Flags      => Anet.Constants.Sys.MSG_NOSIGNAL);
-   begin
-      if Sent /= Data'Length then
-         raise Program_Error with "test fragment send was incomplete";
-      end if;
-   end Z_Raw_Send;
-
-   -------------------------------------------------------------------------
-
-   procedure Z_Set_Nonblocking (Descriptor : C.int)
+   procedure Set_Nonblocking (Descriptor : C.int)
    is
       Flags : C.int;
    begin
@@ -515,11 +529,11 @@ package body Spawn.Transport.Tests is
       then
          raise Program_Error with "fcntl nonblocking failed";
       end if;
-   end Z_Set_Nonblocking;
+   end Set_Nonblocking;
 
    -------------------------------------------------------------------------
 
-   procedure Z_Set_Send_Buffer (Descriptor : C.int; Size : Positive)
+   procedure Set_Send_Buffer (Descriptor : C.int; Size : Positive)
    is
       Value : aliased C.int := C.int (Size);
    begin
@@ -532,6 +546,6 @@ package body Spawn.Transport.Tests is
       then
          raise Program_Error with "setsockopt send buffer failed";
       end if;
-   end Z_Set_Send_Buffer;
+   end Set_Send_Buffer;
 
 end Spawn.Transport.Tests;

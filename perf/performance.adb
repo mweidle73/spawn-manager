@@ -71,6 +71,7 @@ is
      (Index_Type   => Positive,
       Element_Type => Duration,
       Array_Type   => Sample_Array);
+   --  Order one arm's latency samples before percentile reporting.
 
    procedure Measure_Lifecycle;
    --  Measure one-manager pool initialization plus cleanup.
@@ -194,7 +195,10 @@ is
    is
       protected Failures is
          procedure Mark;
+         --  Record that one parallel runner observed a failed request.
+
          function Seen return Boolean;
+         --  Return whether any parallel runner observed a failed request.
       private
          Failed : Boolean := False;
       end Failures;
