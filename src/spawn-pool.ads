@@ -40,6 +40,12 @@ with Spawn.Protocol;
 
 package Spawn.Pool is
 
+   --  The process owns one global manager pool. Each Execute call acquires
+   --  one exclusive manager lease, exchanges one frame and either returns the
+   --  manager after reset or poisons the pool. Cleanup first stops new leases,
+   --  then interrupts managers so active callers can leave before descriptors
+   --  and private socket paths are released.
+
    use Ada.Strings.Unbounded;
 
    type Log_Procedure is access procedure (Msg : String);
@@ -117,15 +123,15 @@ private
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
    type Socket_Container is record
-      Address         : Unbounded_String;
-      Cleanup_Address : Unbounded_String;
-      Pid             : GNAT.Expect.Process_Descriptor;
-      Socket          : Socket_Handle;
-      Available       : Boolean;
+      Socket_Address : Unbounded_String;
+      Cleanup_Path   : Unbounded_String;
+      Pid            : GNAT.Expect.Process_Descriptor;
+      Socket         : Socket_Handle;
+      Available      : Boolean;
    end record;
 
-   L : Log_Procedure := null;
-   --  Log procedure.
+   Pool_Log : Log_Procedure := null;
+   --  Diagnostic callback selected for the complete pool lifecycle.
 
    Cmd_Buffer_Size : Ada.Streams.Stream_Element_Offset;
    --  Size of the command send/receive buffer and stream array.

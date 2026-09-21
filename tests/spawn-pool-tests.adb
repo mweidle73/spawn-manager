@@ -78,6 +78,7 @@ package body Spawn.Pool.Tests is
      with Import,
           Convention    => C,
           External_Name => "spawn_test_directory_mode";
+   --  Return the permission bits of one test directory through the C fixture.
 
    task type Executor is
       entry Call;
@@ -131,6 +132,7 @@ package body Spawn.Pool.Tests is
       protected type Start_Signal is
          entry Wait;
          procedure Mark;
+         --  Release Wait after the worker has acquired its manager lease.
       private
          Started : Boolean := False;
       end Start_Signal;
@@ -152,6 +154,8 @@ package body Spawn.Pool.Tests is
       Signal : Start_Signal;
 
       procedure Mark_Manager (Pid : GNAT.Expect.Process_Descriptor);
+      --  Mark lease acquisition and hold the worker at an abort completion.
+
       procedure Mark_Manager (Pid : GNAT.Expect.Process_Descriptor)
       is
          pragma Unreferenced (Pid);
@@ -253,6 +257,8 @@ package body Spawn.Pool.Tests is
       Directory_Changed : Boolean := False;
 
       procedure Remove_Test_Directory;
+      --  Remove the relative socket fixture after restoring the caller cwd.
+
       procedure Remove_Test_Directory
       is
       begin
@@ -369,6 +375,8 @@ package body Spawn.Pool.Tests is
       Initialized : Boolean := False;
 
       procedure Remove_Test_Directory;
+      --  Remove the socket-deletion fixture after pool cleanup completes.
+
       procedure Remove_Test_Directory
       is
       begin
@@ -506,6 +514,8 @@ package body Spawn.Pool.Tests is
           ("/tmp/spawn.retry-" & Anet.Util.Random_String (Len => 12));
 
       procedure Cleanup;
+      --  Close both retry sockets and restore the pool logger hook.
+
       procedure Cleanup
       is
       begin
@@ -513,10 +523,10 @@ package body Spawn.Pool.Tests is
          S_Server.Close;
          Free (X => S_Client);
          Spawn.Pool.Cleanup;
-         L := null;
+         Pool_Log := null;
       end Cleanup;
    begin
-      L := Ada.Text_IO.Put_Line'Access;
+      Pool_Log := Ada.Text_IO.Put_Line'Access;
 
       S_Server.Init;
       S_Client.Init;
@@ -1323,14 +1333,14 @@ package body Spawn.Pool.Tests is
         Lf & ": this is a test" & ASCII.LF &
         Lf & ": log file" & ASCII.LF;
    begin
-      L := Test_Log'Access;
+      Pool_Log := Test_Log'Access;
       Log_A_File (Filename => Lf);
       Assert (Condition => Test_Buffer = Ref_Buffer,
               Message   => "Buffer mismatch: '"
               & To_String (Test_Buffer) & "'");
 
       begin
-         L := Test_Log_Error'Access;
+         Pool_Log := Test_Log_Error'Access;
          Log_A_File (Filename => Lf);
          Fail (Message => "Exception expected");
 
@@ -1338,11 +1348,11 @@ package body Spawn.Pool.Tests is
          when Test_Log_Exception => null;
       end;
 
-      L := null;
+      Pool_Log := null;
 
    exception
       when others =>
-         L := null;
+         Pool_Log := null;
          raise;
    end Log_A_File;
 
