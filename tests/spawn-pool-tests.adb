@@ -1730,9 +1730,12 @@ package body Spawn.Pool.Tests is
    is
    begin
       Test_Buffer := Test_Buffer & Msg & ASCII.LF;
-      if Ada.Strings.Fixed.Index
-        (Source  => Msg,
-         Pattern => "terminated") > 0
+      if (Ada.Strings.Fixed.Index
+            (Source  => Msg,
+             Pattern => "terminated") > 0
+          or else Ada.Strings.Fixed.Index
+            (Source  => Msg,
+             Pattern => "Timeout occurred") > 0)
         and then not Ada.Text_IO.Is_Open (Ready_Log_File)
       then
          Ada.Text_IO.Create
