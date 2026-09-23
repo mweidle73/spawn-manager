@@ -102,7 +102,9 @@ package body Spawn.Pool is
    --  Return whether Result leaves manager supervision unsafe for reuse.
 
    procedure Remove_Pool_Directory (Path : String);
-   --  Remove an empty private socket directory without aborting cleanup.
+   --  Remove an empty private socket directory without aborting cleanup. An
+   --  already absent directory is clean because its parent may be
+   --  caller-owned.
 
    function Result_Timeout
      (Child_Timeout : Protocol.Timeout_Milliseconds)
@@ -883,7 +885,9 @@ package body Spawn.Pool is
    procedure Remove_Pool_Directory (Path : String)
    is
    begin
-      if Path'Length > 0 then
+      if Path'Length > 0
+        and then Ada.Directories.Exists (Name => Path)
+      then
          Ada.Directories.Delete_Directory (Directory => Path);
       end if;
    exception

@@ -373,6 +373,54 @@ package body Spawn.Pool.Tests is
 
    -------------------------------------------------------------------------
 
+   procedure Cleanup_Removed_Pool_Directory
+   is
+      use Ada.Directories;
+
+      Dir : constant String := "obj/missing-pool-directory-"
+        & Anet.Util.Random_String (Len => 8);
+      Error_Prefix : constant String
+        := "Unable to remove private socket directory '";
+      Initialized : Boolean := False;
+   begin
+      Create_Directory (New_Directory => Dir);
+      Test_Buffer := Null_Unbounded_String;
+      Spawn.Pool.Init
+        (Manager_Path => Manager_Path,
+         Socket_Dir   => Dir,
+         Log          => Test_Log'Access);
+      Initialized := True;
+
+      --  Abuild removes its complete temporary tree through the final manager
+      --  request before shutting the pool down. Model that exact ordering.
+      Spawn.Pool.Execute (Command => "/bin/rm -rf -- " & Dir);
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+
+      Assert
+        (Condition => Ada.Strings.Fixed.Index
+           (Source  => To_String (Test_Buffer),
+            Pattern => Error_Prefix) = 0,
+         Message   => "missing private socket directory was reported");
+      Test_Buffer := Null_Unbounded_String;
+   exception
+      when others =>
+         if Initialized then
+            begin
+               Spawn.Pool.Cleanup;
+            exception
+               when others => null;
+            end;
+         end if;
+         if Exists (Name => Dir) then
+            Delete_Tree (Directory => Dir);
+         end if;
+         Test_Buffer := Null_Unbounded_String;
+         raise;
+   end Cleanup_Removed_Pool_Directory;
+
+   -------------------------------------------------------------------------
+
    procedure Cleanup_Socket_After_Delete_Error
    is
       use Ada.Directories;
@@ -1246,6 +1294,9 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Cleanup_Relative_Socket'Access,
          Name    => "Cleanup relative socket");
+      T.Add_Test_Routine
+        (Routine => Cleanup_Removed_Pool_Directory'Access,
+         Name    => "Ignore externally removed pool directory");
       T.Add_Test_Routine
         (Routine => Cleanup_Socket_After_Delete_Error'Access,
          Name    => "Continue cleanup after delete error");

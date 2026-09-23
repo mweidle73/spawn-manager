@@ -120,6 +120,9 @@ package Spawn.Pool.Tests is
    procedure Cleanup_Relative_Socket;
    --  Verify cleanup after a manager changes its working directory.
 
+   procedure Cleanup_Removed_Pool_Directory;
+   --  Verify cleanup accepts an externally removed private socket directory.
+
    procedure Cleanup_Socket_After_Delete_Error;
    --  Verify cleanup continues after a manager socket cannot be deleted.
 

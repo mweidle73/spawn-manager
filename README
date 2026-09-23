@@ -76,7 +76,9 @@ variants and every result alternative.
 binary. The library never searches `PATH`, and it passes the buffer bound and
 socket address as separate arguments rather than reparsing a command string.
 Each pool creates its socket endpoints below one randomized mode-`0700`
-directory and removes that directory during cleanup.
+directory and removes that directory during cleanup. Cleanup also accepts an
+already absent private directory, for example when a caller removed its
+temporary parent through the final manager request.
 
 Lifecycle boundaries
 --------------------
