@@ -151,6 +151,10 @@ calls `execve`, reports pre-exec `errno`, waits for the exact status and owns
 timeout cleanup. The parent accepts a `/proc/self/fd` descriptor bound only
 after a complete scan; any open, read or close error selects the finite soft
 descriptor-limit fallback before `fork`.
+The attached manager signal handler invokes the C containment hook before its
+best-effort Ada logging and socket cleanup, then exits immediately. Log or
+socket-close failures therefore cannot bypass active-group termination or OS
+exit, while the explicit listener close retains socket-path cleanup.
 Protocol handling, request construction, policy, diagnostics and pool state
 remain Ada. Comments in the C module document the operations which are safe
 between `fork` and `execve` and the ownership of every child cleanup path.

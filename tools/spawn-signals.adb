@@ -41,7 +41,7 @@ package body Spawn.Signals is
      with Import,
           Convention    => C,
           External_Name => "spawn_posix_terminate_current";
-   --  Kill the active request group through the async-signal-safe C boundary.
+   --  Kill the C-owned active request group, or do nothing when none exists.
 
    -------------------------------------------------------------------------
 
@@ -52,34 +52,17 @@ package body Spawn.Signals is
       procedure Handle_Signal
       is
       begin
-         pragma Debug
-           (Logger.Log_File ("Signal received - shutting down"));
-         Socket_L.Close;
-         Socket_C.Close;
-         if Running then
+         Terminate_Current;
+         begin
             pragma Debug
-              (Logger.Log_File
-                 ("Active request still running, terminating group"));
-            Terminate_Current;
-         end if;
+              (Logger.Log_File ("Signal received - shutting down"));
+            Socket_L.Close;
+            Socket_C.Close;
+         exception
+            when others => null;
+         end;
          GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));
       end Handle_Signal;
-
-      ----------------------------------------------------------------------
-
-      procedure Set_Running
-      is
-      begin
-         Running := True;
-      end Set_Running;
-
-      ----------------------------------------------------------------------
-
-      procedure Stopped
-      is
-      begin
-         Running := False;
-      end Stopped;
 
    end Exit_Handler_Type;
 

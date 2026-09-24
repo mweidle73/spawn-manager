@@ -37,23 +37,14 @@ package Spawn.Signals is
      (Socket_L : access Anet.Sockets.Unix.TCP_Socket_Type;
       Socket_C : access Anet.Sockets.Unix.TCP_Socket_Type)
    is
-      procedure Set_Running;
-      --  Indicate that the POSIX core owns an active request group which must
-      --  be terminated before exiting to the OS.
-
-      procedure Stopped;
-      --  Indicate that no child is currently running.
-
    private
       procedure Handle_Signal;
-      --  Close manager sockets, terminate any active group and exit promptly.
+      --  Contain the active group before best-effort socket cleanup and exit.
 
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGINT);
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGTERM);
-
-      Running : Boolean := False;
    end Exit_Handler_Type;
-   --  Handler used to perform cleanup and exit to OS on SIGTERM and SIGINT
-   --  signals.
+   --  Handler which contains the current request and exits on SIGTERM or
+   --  SIGINT.
 
 end Spawn.Signals;

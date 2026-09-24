@@ -120,6 +120,7 @@ is
          Signal_Handler : Spawn.Signals.Exit_Handler_Type
            (Socket_L => Listener'Access,
             Socket_C => Connection'Access);
+         pragma Unreferenced (Signal_Handler);
          pragma Unreserve_All_Interrupts;
 
          function Bound_Result_Diagnostic
@@ -134,11 +135,6 @@ is
          procedure Execute_And_Reply
            (Request : Spawn_Manager_Processes.Execution_Request);
          --  Execute one normalized request, log its result and reply once.
-
-         function Execute_Request
-           (Request : Spawn_Manager_Processes.Execution_Request)
-            return Spawn_Manager_Processes.Execution_Result;
-         --  Execute either request kind under the signal-state boundary.
 
          procedure Handle_Exec_Request
            (Frame : Ada.Streams.Stream_Element_Array);
@@ -247,7 +243,7 @@ is
            (Request : Spawn_Manager_Processes.Execution_Request)
          is
             Result : constant Spawn_Manager_Processes.Execution_Result
-              := Execute_Request (Request => Request);
+              := Spawn_Manager_Processes.Execute (Request => Request);
          begin
             pragma Debug
               (Logger.Log_File
@@ -255,26 +251,6 @@ is
                     & Spawn_Manager_Processes.Diagnostic (Result)));
             Send_Reply (Result => To_Protocol_Result (Result));
          end Execute_And_Reply;
-
-         -------------------------------------------------------------------
-
-         function Execute_Request
-           (Request : Spawn_Manager_Processes.Execution_Request)
-            return Spawn_Manager_Processes.Execution_Result
-         is
-            Result : Spawn_Manager_Processes.Execution_Result;
-         begin
-            Signal_Handler.Set_Running;
-            begin
-               Result := Spawn_Manager_Processes.Execute (Request => Request);
-            exception
-               when others =>
-                  Signal_Handler.Stopped;
-                  raise;
-            end;
-            Signal_Handler.Stopped;
-            return Result;
-         end Execute_Request;
 
          -------------------------------------------------------------------
 
