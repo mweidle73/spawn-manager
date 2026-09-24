@@ -46,6 +46,7 @@ static int fail_group_termination_once;
 static int fail_parent_setpgid_once;
 static int fail_proc_scan_once;
 static int fail_close_range_once;
+static int fail_pidfd_open_once;
 static int fail_waitpid_once;
 static int group_signal_after_reap;
 static int interrupt_waitpid_once;
@@ -141,6 +142,11 @@ long __wrap_syscall(long number, ...)
 		unsigned int flags = va_arg(arguments, unsigned int);
 
 		va_end(arguments);
+		if (getpid() == wrapper_owner && fail_pidfd_open_once) {
+			fail_pidfd_open_once = 0;
+			errno = EPERM;
+			return -1;
+		}
 		return __real_syscall(number, pid, flags);
 	}
 #endif
@@ -678,6 +684,23 @@ static void test_no_proc_descriptor_cleanup(void)
 	pass("descriptor cleanup without procfs");
 }
 
+static void test_pidfd_fallback(void)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { "/bin/true", NULL };
+	struct spawn_posix_result result;
+
+	wrapper_owner = getpid();
+	fail_pidfd_open_once = 1;
+	require(spawn_posix_execute(
+		"/bin/true", arguments, 0, empty_environment, "/", 0, NULL,
+		0, NULL, 1000, &result) == 0, "execute without pidfd");
+	wrapper_owner = -1;
+	require(!fail_pidfd_open_once, "pidfd failure fixture was not used");
+	require_exited(&result, 0, "polling fallback without pidfd");
+	pass("pidfd failure uses polling fallback");
+}
+
 static void test_empty_descriptor_fallback(void)
 {
 	pid_t supervisor;
@@ -960,6 +983,7 @@ int main(int argc, char *argv[], char *envp[])
 	require(inherited_fd >= 100, "duplicate descriptor fixture");
 
 	test_no_proc_descriptor_cleanup();
+	test_pidfd_fallback();
 	test_exit_and_signal(self);
 	test_error_pipe_duplication(self);
 	test_exec_failure(self);

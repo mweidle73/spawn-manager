@@ -484,6 +484,34 @@ static int observe_leader(
 	}
 }
 
+/*
+ * Reap an already observed leader and retire its published group identity as
+ * one signal-atomic transition. Failure leaves the identity published unless
+ * waitpid proved the leader was collected, so the caller can fail-stop safely.
+ */
+static int reap_observed_leader(pid_t pid, int *status)
+{
+	sigset_t original_mask;
+	pid_t waited;
+	int wait_error;
+
+	if (block_manager_signals(&original_mask) < 0)
+		return -1;
+	do {
+		waited = waitpid(pid, status, 0);
+	} while (waited < 0 && errno == EINTR);
+	wait_error = waited < 0 ? errno : ECHILD;
+	if (waited == pid)
+		active_group = 0;
+	if (sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0)
+		return -1;
+	if (waited != pid) {
+		errno = wait_error;
+		return -1;
+	}
+	return 0;
+}
+
 /* Reap adopted group members until none remain or the deadline fails. */
 static int reap_group(pid_t group, int64_t deadline)
 {
@@ -674,11 +702,6 @@ int spawn_posix_execute(
 	 */
 	if (timeout_ms >= 0) {
 		pidfd = open_pidfd(pid);
-		if (pidfd < 0 && errno != ENOSYS && errno != EINVAL) {
-			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
-				SPAWN_POSIX_WAIT, errno);
-			goto cleanup;
-		}
 	}
 	started = monotonic_milliseconds();
 	if (started < 0) {
@@ -698,18 +721,13 @@ int spawn_posix_execute(
 	case 2:
 		{
 			siginfo_t ignored = { 0 };
-			pid_t waited;
 
 			if (observe_leader(pid, pidfd, -1, &ignored) < 0) {
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_WAIT, errno);
 				goto cleanup;
 			}
-			active_group = 0;
-			do {
-				waited = waitpid(pid, &status, 0);
-			} while (waited < 0 && errno == EINTR);
-			if (waited != pid) {
+			if (reap_observed_leader(pid, &status) < 0) {
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_WAIT, errno);
 				containment_failed = 1;
@@ -767,12 +785,12 @@ int spawn_posix_execute(
 	{
 		int exec_state = read_child_error(error_pipe[0], &child_error);
 		if (exec_state == 1) {
-			pid_t waited;
-
-			active_group = 0;
-			do {
-				waited = waitpid(pid, &status, 0);
-			} while (waited < 0 && errno == EINTR);
+			if (reap_observed_leader(pid, &status) < 0) {
+				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+					SPAWN_POSIX_WAIT, errno);
+				containment_failed = 1;
+				goto cleanup;
+			}
 			leader_reaped = 1;
 			set_result(result, SPAWN_POSIX_SPAWN_FAILED, -1, 0,
 				child_error.stage, child_error.error_number);
