@@ -2162,6 +2162,7 @@ package body Spawn.Pool.Tests is
            Protocol.Enable_Subreaper,
            Protocol.Create_Error_Pipe,
            Protocol.Process_Group,
+           Protocol.Reset_Signals,
            Protocol.Wait_Child,
            Protocol.Terminate_Group);
       Variable_Name : constant String :=
