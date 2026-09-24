@@ -53,7 +53,8 @@ The two request payloads are:
           string(directory), stream(stdout), stream(stderr), i64(timeout)
 
 The shell request inherits the manager environment and is normalized to
-`/bin/bash -o pipefail -c command`. The exec request uses an absolute
+`/bin/bash -o pipefail -c command`. Compatible commands retain the predecessor
+minimum of two bytes. The exec request uses an absolute
 executable as implicit `argv[0]`; its transmitted arguments exclude `argv[0]`
 and its environment replaces the complete inherited environment. Its working
 directory is also absolute. Version 1 always connects stdin to `/dev/null`. A
@@ -75,6 +76,8 @@ variants and every result alternative.
 `Spawn.Pool.Init` requires the absolute path of the matching `spawn_manager`
 binary. The library never searches `PATH`, and it passes the buffer bound and
 socket address as separate arguments rather than reparsing a command string.
+The bound is at least 30 bytes, the smallest legal shell request frame, and no
+larger than the fixed protocol maximum.
 Each pool creates its socket endpoints below one randomized mode-`0700`
 directory and removes that directory during cleanup. Cleanup also accepts an
 already absent private directory, for example when a caller removed its
@@ -89,9 +92,10 @@ The version 1 API has no independent single-request cancellation operation;
 
 Normal leader exit also terminates and reaps any remaining member of the
 request group before its exit or signal result is returned. If that containment
-cannot complete, the request reports a supervision failure instead of success
-and poisons the pool. This prevents background descendants from crossing the
-lease boundary into a later request.
+cannot complete, the manager makes one final group-kill attempt and fail-stops
+instead of resuming without ownership. The pool observes the lost connection
+as a protocol failure and poisons every manager. This prevents background
+descendants from crossing the lease boundary into a later request.
 
 `Pid_Setup` continues to receive the long-lived manager PID. An optional
 `Pid_Reset` runs after a valid result while the same pool lease is still
