@@ -1506,6 +1506,9 @@ package body Spawn.Pool.Tests is
       procedure Expect_Command_Failed (Command : String);
       --  Require one locally rejected command to use the compatibility error.
 
+      procedure Expect_Invalid_Timeout;
+      --  Require a timeout below -1 to use the compatibility error.
+
       procedure Expect_Command_Failed (Command : String)
       is
       begin
@@ -1522,11 +1525,30 @@ package body Spawn.Pool.Tests is
          when Spawn.Protocol.Request_Error =>
             Fail (Message => "short shell command exposed Request_Error");
       end Expect_Command_Failed;
+
+      procedure Expect_Invalid_Timeout
+      is
+      begin
+         Spawn.Pool.Execute
+           (Command   => " :",
+            Timeout   => -2,
+            Pid_Setup => Count_Setup'Access);
+         Fail (Message => "invalid shell timeout was accepted");
+      exception
+         when Error : Spawn.Pool.Command_Failed =>
+            Assert
+              (Condition => Ada.Exceptions.Exception_Message (Error)
+                 = "Command failed: ' :'",
+               Message   => "invalid timeout diagnostic changed");
+         when Constraint_Error =>
+            Fail (Message => "invalid timeout exposed Constraint_Error");
+      end Expect_Invalid_Timeout;
    begin
       Spawn.Pool.Init (Manager_Path => Manager_Path);
       Initialized := True;
       Expect_Command_Failed (Command => "");
       Expect_Command_Failed (Command => "x");
+      Expect_Invalid_Timeout;
       Assert (Condition => Setup_Calls = 0,
               Message   => "invalid shell command acquired a manager");
       Spawn.Pool.Execute (Command => " :");

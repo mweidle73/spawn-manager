@@ -540,10 +540,10 @@ package body Spawn.Pool is
       Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
    is
-      Request : constant Protocol.Shell_Request_Type
-        := (Command   => To_Unbounded_String (Command),
-            Directory => To_Unbounded_String (Directory),
-            Timeout   => Protocol.Timeout_Milliseconds (Timeout));
+      Request : Protocol.Shell_Request_Type
+        := (Command   => Null_Unbounded_String,
+            Directory => Null_Unbounded_String,
+            Timeout   => -1);
       procedure Execute_Request;
       --  Encode, exchange and classify one validated compatible request.
 
@@ -567,8 +567,7 @@ package body Spawn.Pool is
               (Lease                 => Lease,
                Request               => Data,
                First_Byte_Timeout_MS =>
-                 Result_Timeout
-                   (Child_Timeout => Protocol.Timeout_Milliseconds (Timeout)),
+                 Result_Timeout (Child_Timeout => Request.Timeout),
                Pid_Setup             => Pid_Setup);
          exception
             when Spawn.Protocol.Protocol_Error
@@ -597,6 +596,13 @@ package body Spawn.Pool is
          end if;
       end Execute_Request;
    begin
+      if Timeout < -1 then
+         raise Command_Failed with "Command failed: '" & Command & "'";
+      end if;
+      Request :=
+        (Command   => To_Unbounded_String (Command),
+         Directory => To_Unbounded_String (Directory),
+         Timeout   => Protocol.Timeout_Milliseconds (Timeout));
       Pool_Log (Msg => "Executing command '" & Command & "'");
       Execute_Request;
    exception
