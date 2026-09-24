@@ -97,6 +97,14 @@ is
            (Message => "Starting Spawn Manager (version "
               & Spawn.Version.Version_String & ")"));
 
+      if Buffer_Size < Spawn.Protocol.Minimum_Shell_Request_Frame_Size
+        or else Buffer_Size > Spawn.Protocol.Maximum_Frame_Size
+      then
+         pragma Debug (Logger.Log_File ("Invalid protocol buffer size"));
+         Ada.Command_Line.Set_Exit_Status (Code => Ada.Command_Line.Failure);
+         return;
+      end if;
+
       if not Anet.Sockets.Unix.Is_Valid (Path => Socket_Path) then
          pragma Debug
            (Logger.Log_File ("UNIX path too long '" & Socket_Path & "'"));

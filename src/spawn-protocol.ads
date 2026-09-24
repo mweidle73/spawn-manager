@@ -105,6 +105,10 @@ package Spawn.Protocol is
    Header_Kind_Offset      : constant := Header_Version_Offset + U16_Size;
    Header_Length_Offset    : constant := Header_Kind_Offset + U16_Size;
    Header_Size             : constant := Header_Length_Offset + U32_Size;
+   Minimum_Shell_Command_Size : constant := 2;
+   Minimum_Shell_Request_Frame_Size : constant
+     := Header_Size + 2 * U32_Size + I64_Size
+        + Minimum_Shell_Command_Size;
 
    Protocol_Magic : constant Ada.Streams.Stream_Element_Array (1 .. Magic_Size)
      := (Character'Pos ('S'),

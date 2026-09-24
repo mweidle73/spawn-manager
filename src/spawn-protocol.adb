@@ -162,6 +162,10 @@ package body Spawn.Protocol is
       Active_Bound   : Positive);
    --  Reject a payload whose complete frame exceeds the active bound.
 
+   procedure Validate_Shell_Command
+     (Value : Ada.Strings.Unbounded.Unbounded_String);
+   --  Preserve the compatible shell path's two-byte command minimum.
+
    procedure Validate_Stream (Stream : Stream_Specification_Type);
    --  Reject a stream specification which cannot be encoded.
 
@@ -564,6 +568,7 @@ package body Spawn.Protocol is
       end if;
 
       Decode_String (Data => Data, Cursor => Cursor, Value => Request.Command);
+      Validate_Shell_Command (Value => Request.Command);
       Decode_String
         (Data   => Data,
          Cursor => Cursor,
@@ -1174,6 +1179,7 @@ package body Spawn.Protocol is
    is
       Payload_Length : Natural := I64_Size;
    begin
+      Validate_Shell_Command (Value => Request.Command);
       Payload_Length := Payload_Length
         + String_Field_Length (Value => Request.Command);
       Payload_Length := Payload_Length
@@ -1286,6 +1292,20 @@ package body Spawn.Protocol is
          raise Protocol_Error with "frame exceeds active bound";
       end if;
    end Validate_Frame_Payload;
+
+   -------------------------------------------------------------------------
+
+   procedure Validate_Shell_Command
+     (Value : Ada.Strings.Unbounded.Unbounded_String)
+   is
+   begin
+      Validate_String (Value => Value);
+      if Ada.Strings.Unbounded.Length (Value)
+        < Minimum_Shell_Command_Size
+      then
+         raise Request_Error with "shell command is shorter than two bytes";
+      end if;
+   end Validate_Shell_Command;
 
    -------------------------------------------------------------------------
 

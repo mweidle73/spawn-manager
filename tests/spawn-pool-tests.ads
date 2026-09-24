@@ -108,6 +108,9 @@ package Spawn.Pool.Tests is
    procedure Invalid_Manager_Path;
    --  Verify the manager executable must be supplied as an absolute path.
 
+   procedure Invalid_Protocol_Buffer_Size;
+   --  Verify the pool rejects a bound below the smallest shell request.
+
    procedure Invalid_Socket_Directory;
    --  Verify error behavior with invalid socket directory.
 

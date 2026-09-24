@@ -772,7 +772,7 @@ package body Spawn.Pool is
       then
          raise Pool_Error with "manager path must be absolute";
       end if;
-      if Buffer_Size < Protocol.Header_Size
+      if Buffer_Size < Protocol.Minimum_Shell_Request_Frame_Size
         or else Buffer_Size > Protocol.Maximum_Frame_Size
       then
          raise Pool_Error with "invalid protocol buffer size";

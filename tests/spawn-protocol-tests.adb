@@ -992,6 +992,30 @@ package body Spawn.Protocol.Tests is
          Reject_Request (Data => Data, Name => "negative shell timeout");
       end;
       declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 28)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#01#,
+               16#00#, 16#00#, 16#00#, 16#10#,
+               16#00#, 16#00#, 16#00#, 16#00#,
+               16#00#, 16#00#, 16#00#, 16#00#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#);
+      begin
+         Reject_Request (Data => Data, Name => "empty shell command");
+      end;
+      declare
+         Data : constant Ada.Streams.Stream_Element_Array (1 .. 29)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#01#,
+               16#00#, 16#00#, 16#00#, 16#11#,
+               16#00#, 16#00#, 16#00#, 16#01#, 16#78#,
+               16#00#, 16#00#, 16#00#, 16#00#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#);
+      begin
+         Reject_Request (Data => Data, Name => "one-byte shell command");
+      end;
+      declare
          Data : constant Ada.Streams.Stream_Element_Array (1 .. 16)
            := (16#53#, 16#50#, 16#57#, 16#4e#,
                16#00#, 16#01#, 16#00#, 16#01#,
@@ -1095,6 +1119,38 @@ package body Spawn.Protocol.Tests is
            (Request      => Invalid,
             Active_Bound => Maximum_Frame_Size);
          Fail (Message => "encoded shell string with NUL accepted");
+      exception
+         when Request_Error => null;
+      end;
+
+      declare
+         Invalid : constant Shell_Request_Type
+           := (Command   => Ada.Strings.Unbounded.Null_Unbounded_String,
+               Directory => Ada.Strings.Unbounded.Null_Unbounded_String,
+               Timeout   => 0);
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Shell_Request_Frame_Length
+           (Request      => Invalid,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "empty encoded shell command accepted");
+      exception
+         when Request_Error => null;
+      end;
+
+      declare
+         Invalid : constant Shell_Request_Type
+           := (Command => Ada.Strings.Unbounded.To_Unbounded_String ("x"),
+               Directory => Ada.Strings.Unbounded.Null_Unbounded_String,
+               Timeout => 0);
+         Ignored : Positive := 1;
+         pragma Unreferenced (Ignored);
+      begin
+         Ignored := Shell_Request_Frame_Length
+           (Request      => Invalid,
+            Active_Bound => Maximum_Frame_Size);
+         Fail (Message => "one-byte encoded shell command accepted");
       exception
          when Request_Error => null;
       end;

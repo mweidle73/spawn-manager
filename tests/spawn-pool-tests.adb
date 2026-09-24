@@ -1280,6 +1280,9 @@ package body Spawn.Pool.Tests is
         (Routine => Timeout_Descendant_Group'Access,
          Name    => "Timeout descendant process group");
       T.Add_Test_Routine
+        (Routine => Invalid_Protocol_Buffer_Size'Access,
+         Name    => "Enforce minimum protocol buffer size");
+      T.Add_Test_Routine
         (Routine => Invalid_Manager_Path'Access,
          Name    => "Reject relative manager path");
       T.Add_Test_Routine
@@ -1321,6 +1324,35 @@ package body Spawn.Pool.Tests is
    exception
       when Spawn.Pool.Pool_Error => null;
    end Invalid_Manager_Path;
+
+   -------------------------------------------------------------------------
+
+   procedure Invalid_Protocol_Buffer_Size
+   is
+      Minimum_Buffer_Size : constant Positive
+        := Spawn.Protocol.Header_Size + 2 * Spawn.Protocol.U32_Size
+           + Spawn.Protocol.I64_Size + 2;
+   begin
+      begin
+         Spawn.Pool.Init
+           (Manager_Path => Manager_Path,
+            Buffer_Size  => Minimum_Buffer_Size - 1);
+         Spawn.Pool.Cleanup;
+         Fail (Message => "undersized protocol buffer accepted");
+      exception
+         when Spawn.Pool.Pool_Error => null;
+      end;
+
+      Spawn.Pool.Init
+        (Manager_Path => Manager_Path,
+         Buffer_Size  => Minimum_Buffer_Size);
+      Spawn.Pool.Execute (Command => " :", Directory => "");
+      Spawn.Pool.Cleanup;
+   exception
+      when others =>
+         Spawn.Pool.Cleanup;
+         raise;
+   end Invalid_Protocol_Buffer_Size;
 
    -------------------------------------------------------------------------
 
