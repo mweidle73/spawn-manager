@@ -48,6 +48,9 @@ package Spawn.Transport.Tests is
    procedure Peer_Closure;
    --  Verify orderly closure is distinct from a timeout.
 
+   procedure Ready_Data_Deadline;
+   --  Verify queued data cannot make an expired completion deadline progress.
+
    procedure Send_And_Receive;
    --  Verify the exact-write path produces one complete frame.
 

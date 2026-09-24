@@ -427,22 +427,29 @@ package body Spawn.Transport is
         := (Descriptor => Descriptor,
             Events     => C.short (Events),
             Returned   => 0);
-      Result : C.int;
+      Result  : C.int;
+      Timeout : C.int;
    begin
       loop
          Item.Returned := 0;
+         Timeout := Remaining_Timeout (Deadline => Deadline);
+         if Timeout = 0 then
+            raise Transport_Timeout with "frame transport timed out";
+         end if;
          Result := C_Poll
            (Items   => Item'Access,
             Count   => 1,
-            Timeout => Remaining_Timeout (Deadline => Deadline));
+            Timeout => Timeout);
          if Result = 0 then
-            if Remaining_Timeout (Deadline => Deadline) = 0 then
-               raise Transport_Timeout with "frame transport timed out";
-            end if;
+            null;
          elsif Result < 0 then
             if GNAT.OS_Lib.Errno /= Anet.Constants.Sys.EINTR then
                Raise_OS_Error (Operation => "poll");
             end if;
+         --  poll may report a descriptor which became ready only after its
+         --  rounded-up timeout crossed the exact monotonic deadline.
+         elsif Remaining_Timeout (Deadline => Deadline) = 0 then
+            raise Transport_Timeout with "frame transport timed out";
          elsif Has_Event
            (Returned => Item.Returned,
             Event    => Anet.Constants.Sys.POLLNVAL)

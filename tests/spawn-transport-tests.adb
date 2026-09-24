@@ -92,6 +92,12 @@ package body Spawn.Transport.Tests is
            External_Name => "setsockopt";
    --  Constrain a fixture socket option through the native interface.
 
+   procedure Set_Receive_Chunk_Limit (Descriptor : C.int)
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_limit_receive_chunks";
+   --  Limit one fixture socket's recv calls to one byte, or disable with -1.
+
    Test_Frame : constant Ada.Streams.Stream_Element_Array (1 .. 13)
      := (16#53#, 16#50#, 16#57#, 16#4e#,
          16#00#, 16#01#, 16#00#, 16#03#,
@@ -348,6 +354,9 @@ package body Spawn.Transport.Tests is
         (Routine => Completion_Timeout'Access,
          Name    => "Bound incomplete frame");
       T.Add_Test_Routine
+        (Routine => Ready_Data_Deadline'Access,
+         Name    => "Bound ready frame data");
+      T.Add_Test_Routine
         (Routine => Extra_Data_Is_Rejected'Access,
          Name    => "Reject queued bytes after frame");
       T.Add_Test_Routine
@@ -421,6 +430,48 @@ package body Spawn.Transport.Tests is
          raise Program_Error with "test fragment send was incomplete";
       end if;
    end Raw_Send;
+
+   -------------------------------------------------------------------------
+
+   procedure Ready_Data_Deadline
+   is
+      Payload_Length : constant := 20_000;
+      Frame : Ada.Streams.Stream_Element_Array
+        (1 .. Spawn.Protocol.Header_Size + Payload_Length)
+        := (others => 16#a5#);
+      Descriptors : Descriptor_Array;
+   begin
+      Spawn.Protocol.Encode_Header
+        (Header =>
+           (Kind           => Spawn.Protocol.Result_Message,
+            Payload_Length => Payload_Length),
+         Data   => Frame);
+      Open_Pair (Descriptors => Descriptors);
+      Raw_Send (Descriptor => Descriptors (0), Data => Frame);
+      Set_Receive_Chunk_Limit (Descriptor => Descriptors (1));
+      begin
+         declare
+            Ignored : constant Ada.Streams.Stream_Element_Array
+              := Receive_Frame
+                (Descriptor            => Descriptors (1),
+                 Active_Bound          => Spawn.Protocol.Maximum_Frame_Size,
+                 First_Byte_Timeout_MS => 100,
+                 Completion_Timeout_MS => 1);
+            pragma Unreferenced (Ignored);
+         begin
+            Fail (Message => "ready frame data bypassed expired deadline");
+         end;
+      exception
+         when Transport_Timeout => null;
+      end;
+      Set_Receive_Chunk_Limit (Descriptor => -1);
+      Close_Pair (Descriptors => Descriptors);
+   exception
+      when others =>
+         Set_Receive_Chunk_Limit (Descriptor => -1);
+         Close_Pair (Descriptors => Descriptors);
+         raise;
+   end Ready_Data_Deadline;
 
    -------------------------------------------------------------------------
 
