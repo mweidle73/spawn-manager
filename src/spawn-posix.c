@@ -272,10 +272,12 @@ static void close_child_descriptors(int highest_descriptor)
 	if (errno != ENOSYS && errno != EINVAL && errno != EPERM)
 		report_child_error(SPAWN_POSIX_CLOSE_DESCRIPTORS);
 #endif
-	if (highest_descriptor < ERROR_FD + 1) {
+	if (highest_descriptor < ERROR_FD) {
 		errno = ENOSYS;
 		report_child_error(SPAWN_POSIX_CLOSE_DESCRIPTORS);
 	}
+	if (highest_descriptor == ERROR_FD)
+		return;
 	for (int fd = ERROR_FD + 1; fd <= highest_descriptor; ++fd)
 		(void)close(fd);
 }
@@ -694,16 +696,23 @@ int spawn_posix_execute(
 	 */
 	switch (wait_for_exec(error_pipe[0], deadline, &child_error)) {
 	case 2:
-		active_group = 0;
 		{
+			siginfo_t ignored = { 0 };
 			pid_t waited;
+
+			if (observe_leader(pid, pidfd, -1, &ignored) < 0) {
+				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+					SPAWN_POSIX_WAIT, errno);
+				goto cleanup;
+			}
+			active_group = 0;
 			do {
 				waited = waitpid(pid, &status, 0);
 			} while (waited < 0 && errno == EINTR);
-			if (waited < 0) {
-				leader_reaped = 1;
+			if (waited != pid) {
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_WAIT, errno);
+				containment_failed = 1;
 				goto cleanup;
 			}
 		}

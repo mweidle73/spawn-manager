@@ -23,12 +23,14 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -43,6 +45,8 @@ static pid_t wrapper_owner = -1;
 static int fail_group_termination_once;
 static int fail_parent_setpgid_once;
 static int fail_proc_scan_once;
+static int fail_close_range_once;
+static int fail_waitpid_once;
 static int group_signal_after_reap;
 static int interrupt_waitpid_once;
 static int track_group_lifetime;
@@ -54,6 +58,7 @@ static int signal_marker_fd = -1;
 DIR *__real_opendir(const char *path);
 int __real_kill(pid_t pid, int signal);
 int __real_setpgid(pid_t pid, pid_t group);
+long __real_syscall(long number, ...);
 pid_t __real_waitpid(pid_t pid, int *status, int options);
 
 /* Fail the first parent-side SIGTERM sent to a request process group. */
@@ -109,6 +114,41 @@ int __wrap_setpgid(pid_t pid, pid_t group)
 	return __real_setpgid(pid, group);
 }
 
+/* Inject close_range failure while forwarding every supported core syscall. */
+long __wrap_syscall(long number, ...)
+{
+	va_list arguments;
+
+	va_start(arguments, number);
+#ifdef SYS_close_range
+	if (number == SYS_close_range) {
+		unsigned int first = va_arg(arguments, unsigned int);
+		unsigned int last = va_arg(arguments, unsigned int);
+		unsigned int flags = va_arg(arguments, unsigned int);
+
+		va_end(arguments);
+		if (getppid() == wrapper_owner && fail_close_range_once) {
+			fail_close_range_once = 0;
+			errno = ENOSYS;
+			return -1;
+		}
+		return __real_syscall(number, first, last, flags);
+	}
+#endif
+#ifdef SYS_pidfd_open
+	if (number == SYS_pidfd_open) {
+		pid_t pid = va_arg(arguments, pid_t);
+		unsigned int flags = va_arg(arguments, unsigned int);
+
+		va_end(arguments);
+		return __real_syscall(number, pid, flags);
+	}
+#endif
+	va_end(arguments);
+	errno = ENOSYS;
+	return -1;
+}
+
 /* Interrupt the first blocking parent wait selected by one regression. */
 pid_t __wrap_waitpid(pid_t pid, int *status, int options)
 {
@@ -118,6 +158,12 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options)
 	    && interrupt_waitpid_once) {
 		interrupt_waitpid_once = 0;
 		errno = EINTR;
+		return -1;
+	}
+	if (getpid() == wrapper_owner && pid > 0 && options == 0
+	    && fail_waitpid_once) {
+		fail_waitpid_once = 0;
+		errno = EIO;
 		return -1;
 	}
 	waited = __real_waitpid(pid, status, options);
@@ -632,6 +678,40 @@ static void test_no_proc_descriptor_cleanup(void)
 	pass("descriptor cleanup without procfs");
 }
 
+static void test_empty_descriptor_fallback(void)
+{
+	pid_t supervisor;
+	int supervisor_status;
+
+	supervisor = fork();
+	require(supervisor >= 0, "fork empty-descriptor supervisor");
+	if (supervisor == 0) {
+		char *empty_environment[] = { NULL };
+		char *arguments[] = { "/bin/true", NULL };
+		struct spawn_posix_result result;
+		int call_result;
+
+#ifdef SYS_close_range
+		(void)__real_syscall(SYS_close_range, 3U, ~0U, 0U);
+#endif
+		(void)close(STDIN_FILENO);
+		(void)close(STDOUT_FILENO);
+		wrapper_owner = getpid();
+		fail_close_range_once = 1;
+		call_result = spawn_posix_execute(
+			"/bin/true", arguments, 0, empty_environment, "/", 0, NULL,
+			0, NULL, -1, &result);
+		_exit(call_result == 0 && result.kind == SPAWN_POSIX_EXITED
+			&& result.exit_status == 0 ? 0 : 97);
+	}
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for empty-descriptor supervisor");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == 0,
+		"empty descriptor fallback was not a no-op");
+	pass("empty descriptor fallback is a no-op");
+}
+
 static void test_group_setup_failure_descendants(
 	const char *self,
 	const char *pid_path)
@@ -734,6 +814,43 @@ static void test_termination_failure_fail_stop(
 	pass("termination failure fail-stops group owner");
 }
 
+/* Prove an unexpected final leader-reap failure cannot resume the manager. */
+static void test_reap_failure_fail_stop(void)
+{
+	pid_t supervisor;
+	pid_t waited;
+	int child_status;
+	int supervisor_status;
+
+	require(prctl(PR_SET_CHILD_SUBREAPER, 1) == 0,
+		"enable reap-failure test subreaper");
+	supervisor = fork();
+	require(supervisor >= 0, "fork reap-failure supervisor");
+	if (supervisor == 0) {
+		char *empty_environment[] = { NULL };
+		char *arguments[] = { "/missing", NULL };
+		struct spawn_posix_result result;
+
+		wrapper_owner = getpid();
+		fail_waitpid_once = 1;
+		(void)spawn_posix_execute(
+			"/definitely/missing/spawn-target", arguments, 0,
+			empty_environment, "/", 0, NULL, 0, NULL, -1, &result);
+		_exit(96);
+	}
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for reap-failure supervisor");
+	do {
+		waited = __real_waitpid(-1, &child_status, 0);
+	} while (waited > 0 || (waited < 0 && errno == EINTR));
+	require(waited < 0 && errno == ECHILD,
+		"reap failure left an adopted child unreaped");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == CONTAINMENT_EXIT_STATUS,
+		"reap failure did not fail-stop supervisor");
+	pass("leader reap failure fail-stops group owner");
+}
+
 static void test_timeout_group(
 	const char *self,
 	const char *pid_path)
@@ -830,6 +947,7 @@ int main(int argc, char *argv[], char *envp[])
 	(void)unlink(symlink_path);
 	(void)unlink(fifo_path);
 	(void)unlink(pid_path);
+	test_empty_descriptor_fallback();
 
 	/*
 	 * Model manager and GNU Make jobserver descriptors: all persistent
@@ -847,6 +965,7 @@ int main(int argc, char *argv[], char *envp[])
 	test_exec_failure(self);
 	test_termination_failure_fail_stop(self, pid_path);
 	require(unlink(pid_path) == 0, "reset fail-stop pid file");
+	test_reap_failure_fail_stop();
 	test_interrupted_group_setup_reap();
 	test_group_setup_failure_descendants(self, pid_path);
 	require(unlink(pid_path) == 0, "reset group setup descendant pid file");
