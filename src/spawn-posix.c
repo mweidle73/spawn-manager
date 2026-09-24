@@ -160,21 +160,29 @@ static int highest_open_descriptor(void)
 	struct dirent *item;
 	int highest = ERROR_FD;
 	int scan_fd;
+	int scan_error;
 
 	if (directory == NULL)
 		return limit_descriptor_ceiling();
 	scan_fd = dirfd(directory);
-	while ((item = readdir(directory)) != NULL) {
+	for (;;) {
 		char *end;
 		long value;
 
+		/* readdir leaves errno unchanged at EOF, so clear it per read. */
+		errno = 0;
+		item = readdir(directory);
+		if (item == NULL) {
+			scan_error = errno;
+			break;
+		}
 		errno = 0;
 		value = strtol(item->d_name, &end, 10);
 		if (errno == 0 && *end == '\0' && value >= 0 && value <= INT_MAX
 		    && value != scan_fd && value > highest)
 			highest = (int)value;
 	}
-	if (closedir(directory) < 0)
+	if (closedir(directory) < 0 || scan_error != 0)
 		return limit_descriptor_ceiling();
 	return highest;
 }

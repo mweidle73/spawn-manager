@@ -148,7 +148,9 @@ termination signals across `fork` and process-group publication; the child
 restores default `SIGINT` and `SIGTERM` dispositions before clearing its signal
 mask. It then performs child-only working-directory and descriptor setup,
 calls `execve`, reports pre-exec `errno`, waits for the exact status and owns
-timeout cleanup.
+timeout cleanup. The parent accepts a `/proc/self/fd` descriptor bound only
+after a complete scan; any open, read or close error selects the finite soft
+descriptor-limit fallback before `fork`.
 Protocol handling, request construction, policy, diagnostics and pool state
 remain Ada. Comments in the C module document the operations which are safe
 between `fork` and `execve` and the ownership of every child cleanup path.

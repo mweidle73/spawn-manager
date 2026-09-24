@@ -45,6 +45,7 @@ static pid_t wrapper_owner = -1;
 static int fail_group_termination_once;
 static int fail_parent_setpgid_once;
 static int fail_proc_scan_once;
+static int fail_proc_read_once;
 static int fail_close_range_once;
 static int fail_pidfd_open_once;
 static int fail_waitpid_once;
@@ -57,6 +58,7 @@ static int tracked_leader_reaped;
 static int signal_marker_fd = -1;
 
 DIR *__real_opendir(const char *path);
+struct dirent *__real_readdir(DIR *directory);
 int __real_kill(pid_t pid, int signal);
 int __real_setpgid(pid_t pid, pid_t group);
 long __real_syscall(long number, ...);
@@ -87,6 +89,17 @@ DIR *__wrap_opendir(const char *path)
 		return NULL;
 	}
 	return __real_opendir(path);
+}
+
+/* Interrupt one procfs scan so the descriptor-limit fallback is required. */
+struct dirent *__wrap_readdir(DIR *directory)
+{
+	if (getpid() == wrapper_owner && fail_proc_read_once) {
+		fail_proc_read_once = 0;
+		errno = EINTR;
+		return NULL;
+	}
+	return __real_readdir(directory);
 }
 
 /* Fail the first parent-side attempt to establish the request group. */
@@ -833,6 +846,61 @@ static void test_empty_descriptor_fallback(void)
 	pass("empty descriptor fallback is a no-op");
 }
 
+/* A failed procfs scan must not publish its partial descriptor maximum. */
+static void test_proc_scan_error_fallback(const char *self)
+{
+	pid_t supervisor;
+	int supervisor_status;
+
+	supervisor = fork();
+	require(supervisor >= 0, "fork proc-scan supervisor");
+	if (supervisor == 0) {
+		char fd_text[32];
+		char *empty_environment[] = { NULL };
+		char *arguments[] = {
+			(char *)self, "fixture", "fd", fd_text, NULL
+		};
+		struct spawn_posix_result result;
+		struct rlimit limit;
+		int source_fd;
+		int inherited_fd;
+		int call_result;
+
+		if (getrlimit(RLIMIT_NOFILE, &limit) < 0
+		    || limit.rlim_cur <= 100)
+			_exit(101);
+		if (limit.rlim_cur > 128) {
+			limit.rlim_cur = 128;
+			if (setrlimit(RLIMIT_NOFILE, &limit) < 0)
+				_exit(102);
+		}
+		source_fd = open("/dev/null", O_RDONLY);
+		if (source_fd < 0)
+			_exit(103);
+		inherited_fd = fcntl(source_fd, F_DUPFD, 100);
+		if (inherited_fd < 100
+		    || snprintf(fd_text, sizeof(fd_text), "%d", inherited_fd)
+		       >= (int)sizeof(fd_text))
+			_exit(104);
+
+		wrapper_owner = getpid();
+		fail_proc_read_once = 1;
+		fail_close_range_once = 1;
+		call_result = spawn_posix_execute(
+			self, arguments, 0, empty_environment, "/", 0, NULL,
+			0, NULL, -1, &result);
+		_exit(call_result == 0 && !fail_proc_read_once
+			&& result.kind == SPAWN_POSIX_EXITED
+			&& result.exit_status == 0 ? 0 : 105);
+	}
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for proc-scan supervisor");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == 0,
+		"proc-scan error exposed an inherited descriptor");
+	pass("procfs scan error uses descriptor-limit fallback");
+}
+
 static void test_group_setup_failure_descendants(
 	const char *self,
 	const char *pid_path)
@@ -1069,6 +1137,7 @@ int main(int argc, char *argv[], char *envp[])
 	(void)unlink(fifo_path);
 	(void)unlink(pid_path);
 	test_empty_descriptor_fallback();
+	test_proc_scan_error_fallback(self);
 
 	/*
 	 * Model manager and GNU Make jobserver descriptors: all persistent

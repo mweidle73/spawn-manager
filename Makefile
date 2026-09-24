@@ -6,6 +6,7 @@ OBJDIR = obj
 COVDIR = $(OBJDIR)/cov
 POSIX_TEST = $(OBJDIR)/spawn_posix_tests
 POSIX_TEST_LDFLAGS = -Wl,--wrap=kill -Wl,--wrap=opendir \
+	-Wl,--wrap=readdir \
 	-Wl,--wrap=setpgid -Wl,--wrap=syscall -Wl,--wrap=waitpid
 PROTOCOL_FAILURE_MANAGER = $(OBJDIR)/protocol_failure_manager
 
