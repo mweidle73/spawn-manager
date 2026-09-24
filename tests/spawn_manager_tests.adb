@@ -45,6 +45,7 @@ package body Spawn_Manager_Tests is
    use Ahven;
    use type Interfaces.Integer_64;
    use type Interfaces.Unsigned_32;
+   use type Spawn.Protocol.Failure_Stage;
    use type Spawn.Protocol.Result_Kind;
 
    -------------------------------------------------------------------------
@@ -56,7 +57,161 @@ package body Spawn_Manager_Tests is
       T.Add_Test_Routine
         (Routine => Send_Receive'Access,
          Name    => "Send and receive data");
+      T.Add_Test_Routine
+        (Routine => Minimum_Bound_Diagnostics'Access,
+         Name    => "Bound diagnostics by active frame");
    end Initialize;
+
+   -------------------------------------------------------------------------
+
+   procedure Minimum_Bound_Diagnostics
+   is
+      Minimum_Shell_Bound : constant := 30;
+      Minimum_Exec_Bound  : constant := 47;
+      Request_Socket  : Anet.Sockets.Unix.TCP_Socket_Type;
+      Protocol_Socket : Anet.Sockets.Unix.TCP_Socket_Type;
+      Spawn_Socket    : Anet.Sockets.Unix.TCP_Socket_Type;
+
+      function Receive_Result
+        (Socket : Anet.Sockets.Unix.TCP_Socket_Type;
+         Bound  : Positive)
+         return Spawn.Protocol.Result_Type;
+      --  Receive and decode one result under the selected active frame bound.
+
+      function Receive_Result
+        (Socket : Anet.Sockets.Unix.TCP_Socket_Type;
+         Bound  : Positive)
+         return Spawn.Protocol.Result_Type
+      is
+         Data : constant Ada.Streams.Stream_Element_Array
+           := Spawn.Transport.Receive_Frame
+             (Descriptor            => Socket.Get_Socket,
+              Active_Bound          => Bound,
+              First_Byte_Timeout_MS => 1_000);
+         Result : Spawn.Protocol.Result_Type;
+      begin
+         Spawn.Protocol.Decode_Result
+           (Data         => Data,
+            Active_Bound => Bound,
+            Result       => Result);
+         return Result;
+      end Receive_Result;
+   begin
+      Request_Socket.Init;
+      Protocol_Socket.Init;
+      Spawn_Socket.Init;
+      delay 0.3;
+
+      Request_Socket.Connect (Path => "obj/spawn_manager_min_request");
+      Request_Socket.Set_Nonblocking_Mode;
+      declare
+         Empty_Shell : constant Ada.Streams.Stream_Element_Array (1 .. 28)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#01#, 16#00#, 16#01#,
+               16#00#, 16#00#, 16#00#, 16#10#,
+               16#00#, 16#00#, 16#00#, 16#00#,
+               16#00#, 16#00#, 16#00#, 16#00#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#,
+               16#ff#, 16#ff#, 16#ff#, 16#ff#);
+         Result : Spawn.Protocol.Result_Type;
+      begin
+         Spawn.Transport.Send_Frame
+           (Descriptor => Request_Socket.Get_Socket,
+            Data       => Empty_Shell);
+         Result := Receive_Result
+           (Socket => Request_Socket,
+            Bound  => Minimum_Shell_Bound);
+         Assert (Condition => Result.Kind = Spawn.Protocol.Request_Rejected,
+                 Message   => "minimum-bound request rejection missing");
+         Assert
+           (Condition => Length (Result.Diagnostic)
+              <= Minimum_Shell_Bound - 17,
+            Message   => "request rejection diagnostic exceeds frame");
+      end;
+      Request_Socket.Close;
+
+      Protocol_Socket.Connect (Path => "obj/spawn_manager_min_protocol");
+      Protocol_Socket.Set_Nonblocking_Mode;
+      declare
+         Invalid : constant Ada.Streams.Stream_Element_Array (1 .. 12)
+           := (16#53#, 16#50#, 16#57#, 16#4e#,
+               16#00#, 16#02#, 16#00#, 16#01#,
+               16#00#, 16#00#, 16#00#, 16#00#);
+         Result : Spawn.Protocol.Result_Type;
+      begin
+         Protocol_Socket.Send (Item => Invalid);
+         Result := Receive_Result
+           (Socket => Protocol_Socket,
+            Bound  => Minimum_Shell_Bound);
+         Assert (Condition => Result.Kind = Spawn.Protocol.Protocol_Failed,
+                 Message   => "minimum-bound protocol failure missing");
+         Assert
+           (Condition => Length (Result.Diagnostic)
+              <= Minimum_Shell_Bound - 17,
+            Message   => "protocol failure diagnostic exceeds frame");
+      end;
+      Protocol_Socket.Close;
+
+      Spawn_Socket.Connect (Path => "obj/spawn_manager_min_spawn");
+      Spawn_Socket.Set_Nonblocking_Mode;
+      declare
+         Request : Spawn.Protocol.Exec_Request_Type;
+         Result  : Spawn.Protocol.Result_Type;
+      begin
+         Request.Executable := To_Unbounded_String ("/missing");
+         Request.Directory := To_Unbounded_String ("/");
+         Request.Timeout := 1_000;
+         declare
+            Length : constant Positive
+              := Spawn.Protocol.Exec_Request_Frame_Length
+                (Request      => Request,
+                 Active_Bound => Minimum_Exec_Bound);
+            Data : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         begin
+            Assert (Condition => Length = Minimum_Exec_Bound,
+                    Message   => "minimum exec frame size changed");
+            Spawn.Protocol.Encode_Exec_Request
+              (Request      => Request,
+               Active_Bound => Minimum_Exec_Bound,
+               Data         => Data);
+            Spawn.Transport.Send_Frame
+              (Descriptor => Spawn_Socket.Get_Socket,
+               Data       => Data);
+         end;
+         Result := Receive_Result
+           (Socket => Spawn_Socket,
+            Bound  => Minimum_Exec_Bound);
+         Assert
+           (Condition => Result.Kind = Spawn.Protocol.Spawn_Failed
+              and then Result.Failure.Stage = Spawn.Protocol.Exec_Target
+              and then Result.Failure.Error_Number = 2,
+            Message   => "minimum-bound spawn failure differs");
+         Assert
+           (Condition => Length (Result.Failure.Diagnostic)
+              <= Minimum_Exec_Bound - 23,
+            Message   => "spawn failure diagnostic exceeds frame");
+      end;
+      Spawn_Socket.Close;
+   exception
+      when others =>
+         begin
+            Request_Socket.Close;
+         exception
+            when others => null;
+         end;
+         begin
+            Protocol_Socket.Close;
+         exception
+            when others => null;
+         end;
+         begin
+            Spawn_Socket.Close;
+         exception
+            when others => null;
+         end;
+         raise;
+   end Minimum_Bound_Diagnostics;
 
    -------------------------------------------------------------------------
 

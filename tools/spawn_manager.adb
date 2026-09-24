@@ -122,6 +122,11 @@ is
             Socket_C => Connection'Access);
          pragma Unreserve_All_Interrupts;
 
+         function Bound_Result_Diagnostic
+           (Result : Spawn.Protocol.Result_Type)
+            return Spawn.Protocol.Result_Type;
+         --  Truncate only diagnostic text so every result fits Buffer_Size.
+
          procedure Dispatch_Frame
            (Frame : Ada.Streams.Stream_Element_Array);
          --  Decode the common header and dispatch one client request.
@@ -151,6 +156,66 @@ is
 
          procedure Serve_Connection;
          --  Receive requests until the peer closes or the protocol fails.
+
+         -------------------------------------------------------------------
+
+         function Bound_Result_Diagnostic
+           (Result : Spawn.Protocol.Result_Type)
+            return Spawn.Protocol.Result_Type
+         is
+            Basic_Overhead : constant := Spawn.Protocol.Header_Size
+              + Spawn.Protocol.Result_Kind_Size + Spawn.Protocol.U32_Size;
+            Spawn_Overhead : constant := Basic_Overhead
+              + Spawn.Protocol.U16_Size + Spawn.Protocol.U32_Size;
+
+            function Truncate
+              (Value  : Unbounded_String;
+               Length : Natural)
+               return Unbounded_String;
+            --  Return at most Length bytes without changing their contents.
+
+            function Truncate
+              (Value  : Unbounded_String;
+               Length : Natural)
+               return Unbounded_String
+            is
+               Source : constant String := To_String (Value);
+               Last   : constant Natural := Natural'Min
+                 (Source'Length, Length);
+            begin
+               if Last = 0 then
+                  return Null_Unbounded_String;
+               end if;
+               return To_Unbounded_String
+                 (Source (Source'First .. Source'First + Last - 1));
+            end Truncate;
+         begin
+            case Result.Kind is
+               when Spawn.Protocol.Spawn_Failed =>
+                  return
+                    (Kind    => Spawn.Protocol.Spawn_Failed,
+                     Failure =>
+                       (Stage        => Result.Failure.Stage,
+                        Error_Number => Result.Failure.Error_Number,
+                        Diagnostic   => Truncate
+                          (Value  => Result.Failure.Diagnostic,
+                           Length => Buffer_Size - Spawn_Overhead)));
+               when Spawn.Protocol.Request_Rejected =>
+                  return
+                    (Kind       => Spawn.Protocol.Request_Rejected,
+                     Diagnostic => Truncate
+                       (Value  => Result.Diagnostic,
+                        Length => Buffer_Size - Basic_Overhead));
+               when Spawn.Protocol.Protocol_Failed =>
+                  return
+                    (Kind       => Spawn.Protocol.Protocol_Failed,
+                     Diagnostic => Truncate
+                       (Value  => Result.Diagnostic,
+                        Length => Buffer_Size - Basic_Overhead));
+               when others =>
+                  return Result;
+            end case;
+         end Bound_Result_Diagnostic;
 
          -------------------------------------------------------------------
 
@@ -267,21 +332,24 @@ is
 
          procedure Send_Reply (Result : Spawn.Protocol.Result_Type)
          is
+            Bounded_Result : constant Spawn.Protocol.Result_Type
+              := Bound_Result_Diagnostic (Result => Result);
             Length : constant Positive := Spawn.Protocol.Result_Frame_Length
-              (Result       => Result,
+              (Result       => Bounded_Result,
                Active_Bound => Buffer_Size);
             Data : Ada.Streams.Stream_Element_Array
               (1 .. Ada.Streams.Stream_Element_Offset (Length));
          begin
             Spawn.Protocol.Encode_Result
-              (Result       => Result,
+              (Result       => Bounded_Result,
                Active_Bound => Buffer_Size,
                Data         => Data);
             Spawn.Transport.Send_Frame
               (Descriptor => Connection.Get_Socket,
                Data       => Data);
             pragma Debug
-              (Logger.Log_File ("Result sent [" & Result.Kind'Image & "]"));
+              (Logger.Log_File
+                 ("Result sent [" & Bounded_Result.Kind'Image & "]"));
          end Send_Reply;
 
          -------------------------------------------------------------------

@@ -36,6 +36,9 @@ package Spawn_Manager_Tests is
    procedure Initialize (T : in out Testcase);
    --  Initialize testcase.
 
+   procedure Minimum_Bound_Diagnostics;
+   --  Verify diagnostic results fit the smallest request-capable bounds.
+
    procedure Send_Receive;
    --  Send/receive data to/from spawn_manager.
 

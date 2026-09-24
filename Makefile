@@ -52,6 +52,9 @@ spawn_tests:
 tests: $(POSIX_TEST) $(PROTOCOL_FAILURE_MANAGER) spawn_tests spawn_manager
 	@$(POSIX_TEST)
 	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
+	@$(OBJDIR)/spawn_manager 30 $(OBJDIR)/spawn_manager_min_request &
+	@$(OBJDIR)/spawn_manager 30 $(OBJDIR)/spawn_manager_min_protocol &
+	@$(OBJDIR)/spawn_manager 47 $(OBJDIR)/spawn_manager_min_spawn &
 	@$(OBJDIR)/test_runner
 	@tests/check_adaflags.sh "$(CURDIR)"
 	@tests/check_install.sh "$(CURDIR)"
@@ -88,6 +91,9 @@ cov: $(POSIX_TEST) $(PROTOCOL_FAILURE_MANAGER) spawn_manager
 	@rm -f $(COVDIR)/*.gcda
 	@gnatmake -Pspawn_tests.gpr -p -XBUILD="coverage"
 	@$(OBJDIR)/spawn_manager 8192 $(OBJDIR)/spawn_manager_0 &
+	@$(OBJDIR)/spawn_manager 30 $(OBJDIR)/spawn_manager_min_request &
+	@$(OBJDIR)/spawn_manager 30 $(OBJDIR)/spawn_manager_min_protocol &
+	@$(OBJDIR)/spawn_manager 47 $(OBJDIR)/spawn_manager_min_spawn &
 	@$(COVDIR)/test_runner
 	@lcov --ignore-errors inconsistent -c -d $(COVDIR) \
 		-o $(COVDIR)/cov.info

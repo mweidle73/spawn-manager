@@ -73,6 +73,9 @@ diagnostic string for request/protocol rejection. The complete field map,
 stage numbering and bounds are maintained beside the protocol constants in
 `src/spawn-protocol.ads`; golden-byte tests independently pin both request
 variants and every result alternative.
+Diagnostic text is truncated when necessary so the complete result remains
+within the active frame bound; result kind, failure stage and errno are never
+discarded to make it fit.
 
 `Spawn.Pool.Init` requires the absolute path of the matching `spawn_manager`
 binary. The library never searches `PATH`, and it passes the buffer bound and
