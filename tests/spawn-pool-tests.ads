@@ -111,6 +111,9 @@ package Spawn.Pool.Tests is
    procedure Invalid_Protocol_Buffer_Size;
    --  Verify the pool rejects a bound below the smallest shell request.
 
+   procedure Invalid_Shell_Command;
+   --  Verify short compatible commands retain the Command_Failed contract.
+
    procedure Invalid_Socket_Directory;
    --  Verify error behavior with invalid socket directory.
 

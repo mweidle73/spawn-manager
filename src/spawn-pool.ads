@@ -84,7 +84,8 @@ package Spawn.Pool is
    --  measured in milliseconds and -1 means unlimited. Pid_Setup receives the
    --  long-lived manager before it forks the shell. Pid_Reset runs after a
    --  valid result and before that manager becomes reusable. Raise
-   --  Command_Failed for every result other than exit status zero.
+   --  Command_Failed for invalid requests and every result other than exit
+   --  status zero.
 
    function Execute
      (Request   : Spawn.Protocol.Exec_Request_Type;

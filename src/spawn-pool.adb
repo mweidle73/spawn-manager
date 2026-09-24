@@ -533,52 +533,65 @@ package body Spawn.Pool is
         := (Command   => To_Unbounded_String (Command),
             Directory => To_Unbounded_String (Directory),
             Timeout   => Protocol.Timeout_Milliseconds (Timeout));
-      Length : constant Positive := Protocol.Shell_Request_Frame_Length
-        (Request      => Request,
-         Active_Bound => Positive (Cmd_Buffer_Size));
-      Data : Ada.Streams.Stream_Element_Array
-        (1 .. Ada.Streams.Stream_Element_Offset (Length));
-      Lease  : Lease_Guard;
-      Result : Protocol.Result_Type;
+      procedure Execute_Request;
+      --  Encode, exchange and classify one validated compatible request.
+
+      procedure Execute_Request
+      is
+         Length : constant Positive := Protocol.Shell_Request_Frame_Length
+           (Request      => Request,
+            Active_Bound => Positive (Cmd_Buffer_Size));
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Length));
+         Lease  : Lease_Guard;
+         Result : Protocol.Result_Type;
+      begin
+         Protocol.Encode_Shell_Request
+           (Request      => Request,
+            Active_Bound => Positive (Cmd_Buffer_Size),
+            Data         => Data);
+
+         begin
+            Result := Exchange_Request
+              (Lease                 => Lease,
+               Request               => Data,
+               First_Byte_Timeout_MS =>
+                 Result_Timeout
+                   (Child_Timeout => Protocol.Timeout_Milliseconds (Timeout)),
+               Pid_Setup             => Pid_Setup);
+         exception
+            when Spawn.Protocol.Protocol_Error
+               | Spawn.Transport.Extra_Data
+               | Spawn.Transport.Peer_Closed
+               | Spawn.Transport.Transport_Error
+               | Spawn.Transport.Transport_Timeout =>
+               raise Command_Failed with
+                 "Manager transport failed for command: '" & Command & "'";
+         end;
+
+         if Poisons_Pool (Result => Result) then
+            raise Command_Failed with
+              (if Result.Kind = Protocol.Protocol_Failed
+               then "Manager protocol failed for command: '"
+               else "Manager supervision failed for command: '")
+              & Command & "'";
+         end if;
+
+         Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
+
+         if Result.Kind /= Protocol.Exited
+           or else Result.Exit_Status /= 0
+         then
+            raise Command_Failed with "Command failed: '" & Command & "'";
+         end if;
+      end Execute_Request;
    begin
       Pool_Log (Msg => "Executing command '" & Command & "'");
-
-      Protocol.Encode_Shell_Request
-        (Request      => Request,
-         Active_Bound => Positive (Cmd_Buffer_Size),
-         Data         => Data);
-
-      begin
-         Result := Exchange_Request
-           (Lease                 => Lease,
-            Request               => Data,
-            First_Byte_Timeout_MS =>
-              Result_Timeout
-                (Child_Timeout => Protocol.Timeout_Milliseconds (Timeout)),
-            Pid_Setup             => Pid_Setup);
-      exception
-         when Spawn.Protocol.Protocol_Error
-            | Spawn.Transport.Extra_Data
-            | Spawn.Transport.Peer_Closed
-            | Spawn.Transport.Transport_Error
-            | Spawn.Transport.Transport_Timeout =>
-            raise Command_Failed with
-              "Manager transport failed for command: '" & Command & "'";
-      end;
-
-      if Poisons_Pool (Result => Result) then
-         raise Command_Failed with
-           (if Result.Kind = Protocol.Protocol_Failed
-            then "Manager protocol failed for command: '"
-            else "Manager supervision failed for command: '")
-           & Command & "'";
-      end if;
-
-      Reset_And_Release (Lease => Lease, Pid_Reset => Pid_Reset);
-
-      if Result.Kind /= Protocol.Exited or else Result.Exit_Status /= 0 then
+      Execute_Request;
+   exception
+      when Spawn.Protocol.Protocol_Error
+         | Spawn.Protocol.Request_Error =>
          raise Command_Failed with "Command failed: '" & Command & "'";
-      end if;
    end Execute;
 
    -------------------------------------------------------------------------

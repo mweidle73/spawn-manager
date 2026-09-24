@@ -23,12 +23,13 @@ Process execution
 The existing public command-string API deliberately retains Bash semantics.
 The manager normalizes each request to an absolute `/bin/bash -o pipefail -c`
 launch and sends it through the same internal process representation intended
-for structured argument-vector requests. `Spawn.Pool.Execute` also accepts a
-structured request with an absolute executable, ordered arguments, a complete
-replacement environment, child working directory, independent output streams
-and timeout. It returns the exact exit, signal, timeout or spawn-failure
-result; `Execute_Checked` maps every nonzero result to the compatibility
-exception.
+for structured argument-vector requests. The command-string procedure maps an
+invalid request and every result other than exit status zero to
+`Command_Failed`. `Spawn.Pool.Execute` also accepts a structured request with
+an absolute executable, ordered arguments, a complete replacement environment,
+child working directory, independent output streams and timeout. It returns
+the exact exit, signal, timeout or spawn-failure result; `Execute_Checked` maps
+every nonzero result to the compatibility exception.
 There is no intermediate `spawn_wrapper` process.
 
 Protocol version 1

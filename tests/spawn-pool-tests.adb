@@ -1283,6 +1283,9 @@ package body Spawn.Pool.Tests is
         (Routine => Invalid_Protocol_Buffer_Size'Access,
          Name    => "Enforce minimum protocol buffer size");
       T.Add_Test_Routine
+        (Routine => Invalid_Shell_Command'Access,
+         Name    => "Preserve invalid shell command failure");
+      T.Add_Test_Routine
         (Routine => Invalid_Manager_Path'Access,
          Name    => "Reject relative manager path");
       T.Add_Test_Routine
@@ -1353,6 +1356,60 @@ package body Spawn.Pool.Tests is
          Spawn.Pool.Cleanup;
          raise;
    end Invalid_Protocol_Buffer_Size;
+
+   -------------------------------------------------------------------------
+
+   procedure Invalid_Shell_Command
+   is
+      Initialized : Boolean := False;
+      Setup_Calls : Natural := 0;
+
+      procedure Count_Setup (Pid : GNAT.Expect.Process_Descriptor);
+      --  Count attempts to exchange a locally invalid request with a manager.
+
+      procedure Count_Setup (Pid : GNAT.Expect.Process_Descriptor)
+      is
+         pragma Unreferenced (Pid);
+      begin
+         Setup_Calls := Setup_Calls + 1;
+      end Count_Setup;
+
+      procedure Expect_Command_Failed (Command : String);
+      --  Require one locally rejected command to use the compatibility error.
+
+      procedure Expect_Command_Failed (Command : String)
+      is
+      begin
+         Spawn.Pool.Execute
+           (Command   => Command,
+            Pid_Setup => Count_Setup'Access);
+         Fail (Message => "short shell command was accepted");
+      exception
+         when Error : Spawn.Pool.Command_Failed =>
+            Assert
+              (Condition => Ada.Exceptions.Exception_Message (Error)
+                 = "Command failed: '" & Command & "'",
+               Message   => "short shell command diagnostic changed");
+         when Spawn.Protocol.Request_Error =>
+            Fail (Message => "short shell command exposed Request_Error");
+      end Expect_Command_Failed;
+   begin
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Expect_Command_Failed (Command => "");
+      Expect_Command_Failed (Command => "x");
+      Assert (Condition => Setup_Calls = 0,
+              Message   => "invalid shell command acquired a manager");
+      Spawn.Pool.Execute (Command => " :");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+   exception
+      when others =>
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         raise;
+   end Invalid_Shell_Command;
 
    -------------------------------------------------------------------------
 
