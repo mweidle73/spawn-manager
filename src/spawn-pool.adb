@@ -95,8 +95,11 @@ package body Spawn.Pool is
 
    subtype Lease_Guard is Lease_Guards.Guard;
 
-   procedure Create_Private_Directory (Path : String);
-   --  Atomically create Path with no group or other access.
+   procedure Create_Private_Directory
+     (Path    : String;
+      Created : not null access Boolean);
+   --  Atomically create Path with no group or other access. Set Created as
+   --  soon as mkdir transfers ownership, including across a chmod exception.
 
    function Poisons_Pool (Result : Protocol.Result_Type) return Boolean;
    --  Return whether Result leaves manager supervision unsafe for reuse.
@@ -120,6 +123,10 @@ package body Spawn.Pool is
         (Snapshot       : out Socket_Maps.Map;
          Pool_Directory : out Unbounded_String);
       --  Stop new leases and snapshot managers for out-of-lock cancellation.
+
+      procedure Cancel_Initialization;
+      --  Forget an uncreated pool directory after initialization fails before
+      --  any manager or filesystem ownership exists.
 
       procedure Finish_Cleanup;
       --  Clear manager state after all out-of-lock cleanup has completed.
@@ -406,14 +413,18 @@ package body Spawn.Pool is
 
    -------------------------------------------------------------------------
 
-   procedure Create_Private_Directory (Path : String)
+   procedure Create_Private_Directory
+     (Path    : String;
+      Created : not null access Boolean)
    is
       C_Path : CS.chars_ptr := CS.New_String (Path);
       Error_Number : Integer := 0;
       Result       : C.int;
    begin
+      Created.all := False;
       Result := C_Mkdir (Path => C_Path, Mode => 8#700#);
       if Result = 0 then
+         Created.all := True;
          Result := C_Chmod (Path => C_Path, Mode => 8#700#);
       end if;
       if Result /= 0 then
@@ -808,13 +819,16 @@ package body Spawn.Pool is
            (Containing_Directory => Ada.Directories.Full_Name
               (Name => Socket_Dir),
             Name                 => Pool_Name);
+         Directory_Owned : aliased Boolean := False;
       begin
          Sockets.Start_Initialization
            (Pool_Directory => Cleanup_Directory);
          Pool_Log := Log;
          Cmd_Buffer_Size := Ada.Streams.Stream_Element_Offset (Buffer_Size);
          begin
-            Create_Private_Directory (Path => Pool_Address);
+            Create_Private_Directory
+              (Path    => Pool_Address,
+               Created => Directory_Owned'Access);
             for M in 1 .. Manager_Count loop
                pragma Unreferenced (M);
                Start_Manager
@@ -823,7 +837,11 @@ package body Spawn.Pool is
             end loop;
          exception
             when others =>
-               Cleanup;
+               if Directory_Owned then
+                  Cleanup;
+               else
+                  Sockets.Cancel_Initialization;
+               end if;
                raise;
          end;
       end;
@@ -1054,6 +1072,19 @@ package body Spawn.Pool is
          Snapshot := Data;
          Pool_Directory := Directory;
       end Begin_Cleanup;
+
+      ----------------------------------------------------------------------
+
+      procedure Cancel_Initialization
+      is
+      begin
+         if not Data.Is_Empty or else Active_Count /= 0 then
+            raise Program_Error with "cannot cancel active initialization";
+         end if;
+         Directory := Null_Unbounded_String;
+         Failed := False;
+         Shutting_Down := False;
+      end Cancel_Initialization;
 
       ----------------------------------------------------------------------
 

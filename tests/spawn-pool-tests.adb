@@ -80,6 +80,24 @@ package body Spawn.Pool.Tests is
           External_Name => "spawn_test_directory_mode";
    --  Return the permission bits of one test directory through the C fixture.
 
+   function Directory_Path return CS.chars_ptr
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_directory_path";
+   --  Return the path recorded by the directory-ownership fixtures.
+
+   procedure Collide_Next_Directory (Enabled : C.int)
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_collide_next_directory";
+   --  Make the next mkdir leave a foreign directory and report a collision.
+
+   procedure Fail_Next_Chmod (Enabled : C.int)
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_test_fail_next_chmod";
+   --  Make the next chmod fail after mkdir has transferred ownership.
+
    task type Executor is
       entry Call;
       entry Done (Success : out Boolean);
@@ -661,6 +679,111 @@ package body Spawn.Pool.Tests is
          Cleanup;
          raise;
    end Connect_Retry_On_Refused;
+
+   -------------------------------------------------------------------------
+
+   procedure Directory_Chmod_Failure_Cleanup
+   is
+      use Ada.Directories;
+
+      Root : constant String := "obj/pool-chmod-failure-"
+        & Anet.Util.Random_String (Len => 8);
+      Owned_Path  : Unbounded_String;
+      Initialized : Boolean := False;
+   begin
+      Create_Directory (New_Directory => Root);
+      Fail_Next_Chmod (Enabled => 1);
+      begin
+         Spawn.Pool.Init
+           (Manager_Path => Manager_Path,
+            Socket_Dir   => Root);
+         Initialized := True;
+         Fail (Message => "synthetic chmod failure was accepted");
+      exception
+         when Spawn.Pool.Pool_Error => null;
+      end;
+      Fail_Next_Chmod (Enabled => 0);
+
+      Owned_Path := To_Unbounded_String (CS.Value (Directory_Path));
+      Assert (Condition => Length (Owned_Path) > 0,
+              Message   => "chmod fixture did not record its path");
+      Assert (Condition => not Exists (Name => To_String (Owned_Path)),
+              Message   => "owned directory survived chmod failure");
+      Delete_Tree (Directory => Root);
+
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+   exception
+      when others =>
+         Fail_Next_Chmod (Enabled => 0);
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         if Exists (Name => Root) then
+            Delete_Tree (Directory => Root);
+         end if;
+         raise;
+   end Directory_Chmod_Failure_Cleanup;
+
+   -------------------------------------------------------------------------
+
+   procedure Directory_Collision_Ownership
+   is
+      use Ada.Directories;
+
+      Root : constant String := "obj/pool-collision-"
+        & Anet.Util.Random_String (Len => 8);
+      Foreign_Path : Unbounded_String;
+      Initialized  : Boolean := False;
+
+      procedure Remove_Root;
+      --  Remove the complete collision fixture when it still exists.
+
+      procedure Remove_Root
+      is
+      begin
+         if Exists (Name => Root) then
+            Delete_Tree (Directory => Root);
+         end if;
+      end Remove_Root;
+   begin
+      Create_Directory (New_Directory => Root);
+      Collide_Next_Directory (Enabled => 1);
+      begin
+         Spawn.Pool.Init
+           (Manager_Path => Manager_Path,
+            Socket_Dir   => Root);
+         Initialized := True;
+         Fail (Message => "synthetic directory collision was accepted");
+      exception
+         when Spawn.Pool.Pool_Error => null;
+      end;
+      Collide_Next_Directory (Enabled => 0);
+
+      Foreign_Path := To_Unbounded_String (CS.Value (Directory_Path));
+      Assert (Condition => Length (Foreign_Path) > 0,
+              Message   => "collision fixture did not record its path");
+      Assert (Condition => Exists (Name => To_String (Foreign_Path)),
+              Message   => "foreign collision directory was removed");
+      Remove_Root;
+
+      Spawn.Pool.Init (Manager_Path => Manager_Path);
+      Initialized := True;
+      Spawn.Pool.Execute (Command => "/bin/true");
+      Spawn.Pool.Cleanup;
+      Initialized := False;
+   exception
+      when others =>
+         Collide_Next_Directory (Enabled => 0);
+         if Initialized then
+            Spawn.Pool.Cleanup;
+         end if;
+         Remove_Root;
+         raise;
+   end Directory_Collision_Ownership;
 
    -------------------------------------------------------------------------
 
@@ -1246,6 +1369,12 @@ package body Spawn.Pool.Tests is
       T.Add_Test_Routine
         (Routine => Failed_Init_Cleanup'Access,
          Name    => "Clean failed manager initialization");
+      T.Add_Test_Routine
+        (Routine => Directory_Collision_Ownership'Access,
+         Name    => "Preserve foreign directory on collision");
+      T.Add_Test_Routine
+        (Routine => Directory_Chmod_Failure_Cleanup'Access,
+         Name    => "Clean owned directory after chmod failure");
       T.Add_Test_Routine
         (Routine => Registered_Manager_Log_Failure_Cleanup'Access,
          Name    => "Clean registered manager after ready log failure");

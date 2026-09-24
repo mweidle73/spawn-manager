@@ -14,7 +14,8 @@ project Spawn_Tests is
      ("protocol-failure-manager.c", "spawn-posix-tests.c");
 
    Compiler_Switches := Spawn_Common.Compiler_Switches & "-gnata" & "-gnatwal";
-   Linker_Switches   := ("-Wl,--wrap=recv");
+   Linker_Switches   :=
+     ("-Wl,--wrap=chmod", "-Wl,--wrap=mkdir", "-Wl,--wrap=recv");
 
    case Build is
       when "tests" =>

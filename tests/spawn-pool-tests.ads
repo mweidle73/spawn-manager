@@ -102,6 +102,12 @@ package Spawn.Pool.Tests is
    procedure Command_Timeout;
    --  Test command timeout feature.
 
+   procedure Directory_Collision_Ownership;
+   --  Verify a failed mkdir cannot transfer foreign-directory ownership.
+
+   procedure Directory_Chmod_Failure_Cleanup;
+   --  Verify a post-mkdir chmod failure cleans the directory now owned.
+
    procedure Duplicate_Init;
    --  Verify rejected reinitialization cannot mutate a live pool.
 
