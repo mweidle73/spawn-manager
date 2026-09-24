@@ -111,6 +111,14 @@ Set-user-ID, set-group-ID and file-capability metadata therefore cannot grant
 the child new privileges or clear that signal during `execve`. The restriction
 is inherited by shell children and structured-exec descendants.
 
+The parent-death signal covers the direct request leader only; Linux clears
+that setting in children created by the target. Normal request completion and
+catchable manager termination still clean the complete process group. If the
+manager itself is lost through an uncatchable event such as `SIGKILL` or OOM,
+already forked descendants require the separately selected cgroup containment
+contract. Version 1 does not claim process-group-only cleanup after the process
+which owns that cleanup has ceased to exist.
+
 `Pid_Setup` continues to receive the long-lived manager PID. An optional
 `Pid_Reset` runs after a valid result while the same pool lease is still
 exclusive, before another caller can reuse that manager. Abuild uses the pair

@@ -322,7 +322,11 @@ static void child_exec(
 		(void)close(error_write_fd);
 	}
 
-	/* Establish safe signal state and couple the child to this manager. */
+	/*
+	 * Establish safe signal state and couple the direct leader to this manager.
+	 * Forked target descendants need external cgroup containment if the manager
+	 * dies through an uncatchable event and cannot clean the process group.
+	 */
 	reset_signal_handlers();
 	if (setpgid(0, 0) < 0)
 		report_child_error(SPAWN_POSIX_PROCESS_GROUP);
