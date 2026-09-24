@@ -223,7 +223,33 @@ static int open_output_file(int mode, const char *path)
 	return -1;
 }
 
-/* Clear the manager's inherited signal mask before executing the target. */
+/* Block manager termination signals across fork and group publication. */
+static int block_manager_signals(sigset_t *original_mask)
+{
+	sigset_t mask;
+
+	if (sigemptyset(&mask) < 0
+	    || sigaddset(&mask, SIGINT) < 0
+	    || sigaddset(&mask, SIGTERM) < 0)
+		return -1;
+	return sigprocmask(SIG_BLOCK, &mask, original_mask);
+}
+
+/*
+ * Replace the manager's caught dispositions before the child joins its group.
+ */
+static void reset_signal_handlers(void)
+{
+	struct sigaction action = { 0 };
+
+	action.sa_handler = SIG_DFL;
+	if (sigemptyset(&action.sa_mask) < 0
+	    || sigaction(SIGINT, &action, NULL) < 0
+	    || sigaction(SIGTERM, &action, NULL) < 0)
+		report_child_error(SPAWN_POSIX_RESET_SIGNALS);
+}
+
+/* Clear the inherited signal mask after default dispositions are installed. */
 static void reset_signal_mask(void)
 {
 	sigset_t mask;
@@ -294,7 +320,8 @@ static void child_exec(
 		(void)close(error_write_fd);
 	}
 
-	/* Establish containment and couple the child lifetime to this manager. */
+	/* Establish safe signal state and couple the child to this manager. */
+	reset_signal_handlers();
 	if (setpgid(0, 0) < 0)
 		report_child_error(SPAWN_POSIX_PROCESS_GROUP);
 	if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0)
@@ -303,6 +330,7 @@ static void child_exec(
 		errno = ESRCH;
 		report_child_error(SPAWN_POSIX_PARENT_DEATH);
 	}
+	reset_signal_mask();
 
 	/* Install the version-1 stdin, stdout and stderr contract. */
 	null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -334,7 +362,6 @@ static void child_exec(
 	/* Apply remaining process-local state, close private fds and exec once. */
 	if (directory[0] != '\0' && chdir(directory) < 0)
 		report_child_error(SPAWN_POSIX_CHANGE_DIRECTORY);
-	reset_signal_mask();
 	close_child_descriptors(highest_descriptor);
 	if (fcntl(ERROR_FD, F_SETFD, FD_CLOEXEC) < 0)
 		report_child_error(SPAWN_POSIX_CLOSE_DESCRIPTORS);
@@ -407,26 +434,34 @@ static int wait_for_exec(
 }
 
 /*
- * Wait for the request leader. Return 1 after reaping it, 0 at the deadline
- * and -1 on a wait error. A pidfd avoids polling sleeps when Linux provides it.
+ * Observe request-leader exit without reaping it. Retaining the zombie pins
+ * the numeric process-group identity until every group signal has been sent.
+ * Return 1 after observation, 0 at the deadline and -1 on a wait error.
  */
-static int wait_for_leader(pid_t pid, int pidfd, int64_t deadline, int *status)
+static int observe_leader(
+	pid_t pid,
+	int pidfd,
+	int64_t deadline,
+	siginfo_t *information)
 {
-	if (deadline < 0) {
-		pid_t waited;
-		do {
-			waited = waitpid(pid, status, 0);
-		} while (waited < 0 && errno == EINTR);
-		return waited == pid ? 1 : -1;
-	}
-
 	for (;;) {
-		pid_t waited = waitpid(pid, status, WNOHANG);
-		if (waited == pid)
+		siginfo_t observed = { 0 };
+		int options = WEXITED | WNOWAIT;
+		int waited;
+
+		if (deadline >= 0)
+			options |= WNOHANG;
+		do {
+			waited = waitid(P_PID, (id_t)pid, &observed, options);
+		} while (waited < 0 && errno == EINTR);
+		if (waited < 0)
+			return -1;
+		if (observed.si_pid == pid) {
+			*information = observed;
 			return 1;
-		if (waited < 0) {
-			if (errno == EINTR)
-				continue;
+		}
+		if (deadline < 0) {
+			errno = ECHILD;
 			return -1;
 		}
 		if (remaining_milliseconds(deadline) == 0)
@@ -445,14 +480,6 @@ static int wait_for_leader(pid_t pid, int pidfd, int64_t deadline, int *status)
 			(void)nanosleep(&pause, NULL);
 		}
 	}
-}
-
-/* Return whether the request process group still has a visible member. */
-static int process_group_exists(pid_t group)
-{
-	if (kill(-group, 0) == 0)
-		return 1;
-	return errno == EPERM;
 }
 
 /* Reap adopted group members until none remain or the deadline fails. */
@@ -478,43 +505,29 @@ static int reap_group(pid_t group, int64_t deadline)
 }
 
 /*
- * Terminate one request group: allow a short SIGTERM grace period, SIGKILL
- * survivors, then reap every adopted member. leader_reaped prevents a second
- * wait for a leader already collected by the normal path. A setsid descendant
- * is outside this contract and requires the separate cgroup policy.
+ * Terminate one request group while its unreaped leader pins the numeric group
+ * identity. Optional grace is reserved for timeout and error cleanup; normal
+ * post-exit cleanup sends both signals immediately. Stop publishing the group
+ * before reaping can make its number reusable. A setsid descendant is outside
+ * this contract and requires the separate cgroup policy.
  */
-static int terminate_group(
-	pid_t pid,
-	int pidfd,
-	int *leader_status,
-	int leader_reaped)
+static int terminate_group(pid_t pid, int *leader_status, int allow_grace)
 {
 	int64_t deadline;
 
 	if (kill(-pid, SIGTERM) < 0 && errno != ESRCH)
 		return -1;
 	deadline = monotonic_milliseconds() + TERMINATION_GRACE_MS;
-	if (!leader_reaped) {
-		int waited = wait_for_leader(pid, pidfd, deadline, leader_status);
-		if (waited < 0) {
-			if (errno != ECHILD)
-				return -1;
-			leader_reaped = 1;
-		} else if (waited > 0) {
-			leader_reaped = 1;
-		}
-	}
-	while (process_group_exists(pid)
-	    && remaining_milliseconds(deadline) > 0) {
+	while (allow_grace && remaining_milliseconds(deadline) > 0) {
 		struct timespec pause = {
 			0, POLL_SLICE_MS * 1000 * 1000
 		};
 		(void)nanosleep(&pause, NULL);
 	}
-	if (process_group_exists(pid)
-	    && kill(-pid, SIGKILL) < 0 && errno != ESRCH)
+	if (kill(-pid, SIGKILL) < 0 && errno != ESRCH)
 		return -1;
-	if (!leader_reaped) {
+	active_group = 0;
+	{
 		pid_t waited;
 		do {
 			waited = waitpid(pid, leader_status, 0);
@@ -569,11 +582,15 @@ int spawn_posix_execute(
 	int status = 0;
 	int leader_reaped = 0;
 	int containment_failed = 0;
+	int manager_signals_blocked = 0;
+	int group_setup_error = 0;
 	int64_t started;
 	int64_t deadline;
 	pid_t pid;
 	pid_t parent_pid = getpid();
 	struct child_error child_error = { 0, 0 };
+	siginfo_t leader_information = { 0 };
+	sigset_t original_signal_mask;
 
 	/*
 	 * Phase 1: prepare manager-side supervision before a child exists. The
@@ -599,6 +616,14 @@ int spawn_posix_execute(
 		descriptor_ceiling = highest_open_descriptor();
 	}
 	highest_descriptor = descriptor_ceiling;
+	if (block_manager_signals(&original_signal_mask) < 0) {
+		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+			SPAWN_POSIX_RESET_SIGNALS, errno);
+		(void)close(error_pipe[0]);
+		(void)close(error_pipe[1]);
+		return -1;
+	}
+	manager_signals_blocked = 1;
 
 	/*
 	 * Phase 2: fork exactly once, then establish the request process group in
@@ -610,25 +635,34 @@ int spawn_posix_execute(
 			argv, inherit_environment, envp, directory, stdout_mode,
 			stdout_path, stderr_mode, stderr_path, highest_descriptor);
 	if (pid < 0) {
+		int fork_errno = errno;
+
+		if (sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0) {
+			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+				SPAWN_POSIX_RESET_SIGNALS, errno);
+			(void)close(error_pipe[0]);
+			(void)close(error_pipe[1]);
+			return -1;
+		}
 		set_result(result, SPAWN_POSIX_SPAWN_FAILED, -1, 0,
-			SPAWN_POSIX_FORK, errno);
+			SPAWN_POSIX_FORK, fork_errno);
 		(void)close(error_pipe[0]);
 		(void)close(error_pipe[1]);
 		return 0;
 	}
 	(void)close(error_pipe[1]);
 	active_group = (sig_atomic_t)pid;
-	if (setpgid(pid, pid) < 0 && errno != EACCES && errno != ESRCH) {
-		int saved_errno = errno;
-		pid_t waited;
-
-		(void)kill(pid, SIGKILL);
-		do {
-			waited = waitpid(pid, &status, 0);
-		} while (waited < 0 && errno == EINTR);
-		leader_reaped = waited == pid;
+	if (setpgid(pid, pid) < 0 && errno != EACCES && errno != ESRCH)
+		group_setup_error = errno;
+	if (sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
-			SPAWN_POSIX_PROCESS_GROUP, saved_errno);
+			SPAWN_POSIX_RESET_SIGNALS, errno);
+		goto cleanup;
+	}
+	manager_signals_blocked = 0;
+	if (group_setup_error != 0) {
+		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+			SPAWN_POSIX_PROCESS_GROUP, group_setup_error);
 		goto cleanup;
 	}
 
@@ -660,12 +694,14 @@ int spawn_posix_execute(
 	 */
 	switch (wait_for_exec(error_pipe[0], deadline, &child_error)) {
 	case 2:
+		active_group = 0;
 		{
 			pid_t waited;
 			do {
 				waited = waitpid(pid, &status, 0);
 			} while (waited < 0 && errno == EINTR);
 			if (waited < 0) {
+				leader_reaped = 1;
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_WAIT, errno);
 				goto cleanup;
@@ -678,7 +714,7 @@ int spawn_posix_execute(
 	case 1:
 		break;
 	case 0:
-		if (terminate_group(pid, pidfd, &status, leader_reaped) < 0) {
+		if (terminate_group(pid, &status, 1) < 0) {
 			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 				SPAWN_POSIX_TERMINATE_GROUP, errno);
 			goto cleanup;
@@ -695,9 +731,10 @@ int spawn_posix_execute(
 
 	/* Phase 5: wait for the executed leader or turn its deadline into timeout. */
 	if (!leader_reaped) {
-		int waited = wait_for_leader(pid, pidfd, deadline, &status);
+		int waited = observe_leader(
+			pid, pidfd, deadline, &leader_information);
 		if (waited == 0) {
-			if (terminate_group(pid, pidfd, &status, 0) < 0) {
+			if (terminate_group(pid, &status, 1) < 0) {
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_TERMINATE_GROUP, errno);
 				goto cleanup;
@@ -712,7 +749,6 @@ int spawn_posix_execute(
 				SPAWN_POSIX_WAIT, errno);
 			goto cleanup;
 		}
-		leader_reaped = 1;
 	}
 
 	/*
@@ -722,6 +758,13 @@ int spawn_posix_execute(
 	{
 		int exec_state = read_child_error(error_pipe[0], &child_error);
 		if (exec_state == 1) {
+			pid_t waited;
+
+			active_group = 0;
+			do {
+				waited = waitpid(pid, &status, 0);
+			} while (waited < 0 && errno == EINTR);
+			leader_reaped = 1;
 			set_result(result, SPAWN_POSIX_SPAWN_FAILED, -1, 0,
 				child_error.stage, child_error.error_number);
 			goto cleanup;
@@ -733,12 +776,15 @@ int spawn_posix_execute(
 		}
 	}
 
-	/* Translate the exact wait status only after pre-exec failure is excluded. */
-	if (WIFEXITED(status))
-		set_result(result, SPAWN_POSIX_EXITED, WEXITSTATUS(status), 0,
+	/* Translate observed status only while the leader still pins its group id. */
+	if (leader_information.si_code == CLD_EXITED)
+		set_result(result, SPAWN_POSIX_EXITED,
+			leader_information.si_status, 0,
 			SPAWN_POSIX_NO_FAILURE, 0);
-	else if (WIFSIGNALED(status))
-		set_result(result, SPAWN_POSIX_SIGNALED, -1, WTERMSIG(status),
+	else if (leader_information.si_code == CLD_KILLED
+	    || leader_information.si_code == CLD_DUMPED)
+		set_result(result, SPAWN_POSIX_SIGNALED, -1,
+			leader_information.si_status,
 			SPAWN_POSIX_NO_FAILURE, 0);
 	else
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
@@ -748,18 +794,17 @@ int spawn_posix_execute(
 	 * Phase 6: a terminal leader may leave descendants in its group. Terminate
 	 * and reap them before allowing that leader result to cross the boundary.
 	 */
-	if (process_group_exists(pid)
-	    && terminate_group(pid, pidfd, &status, 1) < 0) {
+	if (terminate_group(pid, &status, 0) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 		containment_failed = 1;
-	}
+	} else
+		leader_reaped = 1;
 
 cleanup:
 	/* Close parent descriptors and contain failures through one ownership exit. */
 	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !containment_failed
-	    && (!leader_reaped || process_group_exists(pid))
-	    && terminate_group(pid, pidfd, &status, leader_reaped) < 0) {
+	    && !leader_reaped && terminate_group(pid, &status, 1) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 		containment_failed = 1;
@@ -769,6 +814,9 @@ cleanup:
 		spawn_posix_terminate_current();
 		_exit(CONTAINMENT_FAILURE_EXIT);
 	}
+	if (manager_signals_blocked
+	    && sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0)
+		_exit(CONTAINMENT_FAILURE_EXIT);
 	active_group = 0;
 	if (pidfd >= 0)
 		(void)close(pidfd);

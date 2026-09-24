@@ -43,8 +43,13 @@ static pid_t wrapper_owner = -1;
 static int fail_group_termination_once;
 static int fail_parent_setpgid_once;
 static int fail_proc_scan_once;
+static int group_signal_after_reap;
 static int interrupt_waitpid_once;
+static int track_group_lifetime;
 static const char *group_setup_wait_path;
+static pid_t tracked_group = -1;
+static int tracked_leader_reaped;
+static int signal_marker_fd = -1;
 
 DIR *__real_opendir(const char *path);
 int __real_kill(pid_t pid, int signal);
@@ -54,6 +59,9 @@ pid_t __real_waitpid(pid_t pid, int *status, int options);
 /* Fail the first parent-side SIGTERM sent to a request process group. */
 int __wrap_kill(pid_t pid, int signal)
 {
+	if (getpid() == wrapper_owner && track_group_lifetime
+	    && pid == -tracked_group && tracked_leader_reaped)
+		group_signal_after_reap = 1;
 	if (getpid() == wrapper_owner && pid < 0 && signal == SIGTERM
 	    && fail_group_termination_once) {
 		fail_group_termination_once = 0;
@@ -95,19 +103,40 @@ int __wrap_setpgid(pid_t pid, pid_t group)
 		errno = EPERM;
 		return -1;
 	}
+	if (getpid() == wrapper_owner && track_group_lifetime
+	    && pid > 0 && group == pid)
+		tracked_group = pid;
 	return __real_setpgid(pid, group);
 }
 
 /* Interrupt the first blocking parent wait selected by one regression. */
 pid_t __wrap_waitpid(pid_t pid, int *status, int options)
 {
+	pid_t waited;
+
 	if (getpid() == wrapper_owner && pid > 0 && options == 0
 	    && interrupt_waitpid_once) {
 		interrupt_waitpid_once = 0;
 		errno = EINTR;
 		return -1;
 	}
-	return __real_waitpid(pid, status, options);
+	waited = __real_waitpid(pid, status, options);
+	if (getpid() == wrapper_owner && track_group_lifetime
+	    && pid == tracked_group && waited == pid)
+		tracked_leader_reaped = 1;
+	return waited;
+}
+
+/* Record whether a forked child enters an inherited manager signal handler. */
+static void record_inherited_signal(int signal_number)
+{
+	char marker = 's';
+	int saved_errno = errno;
+
+	(void)signal_number;
+	if (signal_marker_fd >= 0)
+		(void)write(signal_marker_fd, &marker, sizeof(marker));
+	errno = saved_errno;
 }
 
 static void fail(const char *message)
@@ -526,6 +555,42 @@ static void test_stream_nofollow(
 	pass("nofollow stream failure");
 }
 
+static void test_child_signal_dispositions(const char *fifo_path)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { "/bin/true", NULL };
+	struct spawn_posix_result result;
+	struct sigaction action = { 0 };
+	struct sigaction original;
+	char marker;
+	int marker_pipe[2];
+	ssize_t count;
+
+	require(mkfifo(fifo_path, 0600) == 0, "create signal fixture fifo");
+	require(pipe2(marker_pipe, O_CLOEXEC | O_NONBLOCK) == 0,
+		"create signal marker pipe");
+	action.sa_handler = record_inherited_signal;
+	require(sigemptyset(&action.sa_mask) == 0
+		&& sigaction(SIGTERM, &action, &original) == 0,
+		"install inherited signal fixture");
+	signal_marker_fd = marker_pipe[1];
+	require(spawn_posix_execute(
+		"/bin/true", arguments, 0, empty_environment, "/",
+		SPAWN_POSIX_TRUNCATE_FILE, fifo_path, 0, NULL, 50,
+		&result) == 0, "execute blocked pre-exec signal fixture");
+	signal_marker_fd = -1;
+	require(sigaction(SIGTERM, &original, NULL) == 0,
+		"restore signal disposition");
+	require(close(marker_pipe[1]) == 0, "close signal marker writer");
+	count = read(marker_pipe[0], &marker, sizeof(marker));
+	require(close(marker_pipe[0]) == 0, "close signal marker reader");
+	require(unlink(fifo_path) == 0, "remove signal fixture fifo");
+	require(result.kind == SPAWN_POSIX_TIMED_OUT,
+		"classify blocked pre-exec timeout");
+	require(count == 0, "child entered inherited SIGTERM handler");
+	pass("child resets inherited signal dispositions");
+}
+
 static void test_interrupted_group_setup_reap(void)
 {
 	char *empty_environment[] = { NULL };
@@ -661,6 +726,11 @@ static void test_termination_failure_fail_stop(
 	require(waited == descendant && WIFSIGNALED(descendant_status)
 		&& WTERMSIG(descendant_status) == SIGKILL,
 		"fail-stop did not kill the uncontained group");
+	do {
+		waited = __real_waitpid(-1, &descendant_status, 0);
+	} while (waited > 0 || (waited < 0 && errno == EINTR));
+	require(waited < 0 && errno == ECHILD,
+		"fail-stop left an adopted child unreaped");
 	pass("termination failure fail-stops group owner");
 }
 
@@ -698,11 +768,20 @@ static void test_success_group_cleanup(
 	char *pid_content;
 	pid_t descendant;
 
+	wrapper_owner = getpid();
+	track_group_lifetime = 1;
+	tracked_group = -1;
+	tracked_leader_reaped = 0;
+	group_signal_after_reap = 0;
 	require(spawn_posix_execute(
 		self, arguments, 0, empty_environment, "/",
 		SPAWN_POSIX_TRUNCATE_FILE, pid_path, 0, NULL, 1000, &result) == 0,
 		"execute successful orphan fixture");
+	track_group_lifetime = 0;
+	wrapper_owner = -1;
 	require_exited(&result, 0, "preserve successful leader result");
+	require(!group_signal_after_reap,
+		"request group was signaled after leader reap");
 	pid_content = read_file(pid_path);
 	descendant = (pid_t)strtol(pid_content, NULL, 10);
 	free(pid_content);
@@ -720,6 +799,7 @@ int main(int argc, char *argv[], char *envp[])
 	char stdout_path[PATH_MAX];
 	char stderr_path[PATH_MAX];
 	char symlink_path[PATH_MAX];
+	char fifo_path[PATH_MAX];
 	char pid_path[PATH_MAX];
 	int source_fd;
 	int inherited_fd;
@@ -741,11 +821,14 @@ int main(int argc, char *argv[], char *envp[])
 		< (int)sizeof(stderr_path), "construct stderr path");
 	require(snprintf(symlink_path, sizeof(symlink_path), "%s/link", root)
 		< (int)sizeof(symlink_path), "construct symlink path");
+	require(snprintf(fifo_path, sizeof(fifo_path), "%s/signal-fifo", root)
+		< (int)sizeof(fifo_path), "construct signal fifo path");
 	require(snprintf(pid_path, sizeof(pid_path), "%s/pid", root)
 		< (int)sizeof(pid_path), "construct pid path");
 	(void)unlink(stdout_path);
 	(void)unlink(stderr_path);
 	(void)unlink(symlink_path);
+	(void)unlink(fifo_path);
 	(void)unlink(pid_path);
 
 	/*
@@ -773,6 +856,7 @@ int main(int argc, char *argv[], char *envp[])
 	test_timeout_group(self, pid_path);
 	require(unlink(pid_path) == 0, "reset descendant pid file");
 	test_success_group_cleanup(self, pid_path);
+	test_child_signal_dispositions(fifo_path);
 
 	require(close(inherited_fd) == 0 && close(source_fd) == 0,
 		"close descriptor fixture");

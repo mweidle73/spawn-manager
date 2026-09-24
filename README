@@ -101,6 +101,11 @@ instead of resuming without ownership. The pool observes the lost connection
 as a protocol failure and poisons every manager. This prevents background
 descendants from crossing the lease boundary into a later request.
 
+The leader remains unreaped until all request-group signals have been sent,
+so its numeric process-group identity cannot be recycled into an unrelated
+target. The manager stops publishing that identity to its signal handler
+before the final reap.
+
 `Pid_Setup` continues to receive the long-lived manager PID. An optional
 `Pid_Reset` runs after a valid result while the same pool lease is still
 exclusive, before another caller can reuse that manager. Abuild uses the pair
@@ -125,9 +130,12 @@ bounded by that timeout plus the transport allowance. An intentionally
 unlimited child also has an unlimited first-result-byte wait because version 1
 does not add a heartbeat protocol.
 
-A small C module is the only post-`fork` boundary. It performs child-only
-working-directory and descriptor setup, clears the signal mask, calls `execve`,
-reports pre-exec `errno`, waits for the exact status and owns timeout cleanup.
+A small C module is the only post-`fork` boundary. It blocks manager
+termination signals across `fork` and process-group publication; the child
+restores default `SIGINT` and `SIGTERM` dispositions before clearing its signal
+mask. It then performs child-only working-directory and descriptor setup,
+calls `execve`, reports pre-exec `errno`, waits for the exact status and owns
+timeout cleanup.
 Protocol handling, request construction, policy, diagnostics and pool state
 remain Ada. Comments in the C module document the operations which are safe
 between `fork` and `execve` and the ownership of every child cleanup path.
