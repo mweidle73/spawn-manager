@@ -41,6 +41,8 @@
 #include <unistd.h>
 
 #define ERROR_FD 3
+/* Exit the manager rather than resume after losing containment ownership. */
+#define CONTAINMENT_FAILURE_EXIT 125
 #define POLL_SLICE_MS 10
 #define TERMINATION_GRACE_MS 100
 
@@ -541,6 +543,7 @@ int spawn_posix_execute(
 	int pidfd = -1;
 	int status = 0;
 	int leader_reaped = 0;
+	int containment_failed = 0;
 	int64_t started;
 	int64_t deadline;
 	pid_t pid;
@@ -599,9 +602,13 @@ int spawn_posix_execute(
 	active_group = (sig_atomic_t)pid;
 	if (setpgid(pid, pid) < 0 && errno != EACCES && errno != ESRCH) {
 		int saved_errno = errno;
+		pid_t waited;
+
 		(void)kill(pid, SIGKILL);
-		(void)waitpid(pid, &status, 0);
-		leader_reaped = 1;
+		do {
+			waited = waitpid(pid, &status, 0);
+		} while (waited < 0 && errno == EINTR);
+		leader_reaped = waited == pid;
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_PROCESS_GROUP, saved_errno);
 		goto cleanup;
@@ -724,14 +731,25 @@ int spawn_posix_execute(
 	 * and reap them before allowing that leader result to cross the boundary.
 	 */
 	if (process_group_exists(pid)
-	    && terminate_group(pid, pidfd, &status, 1) < 0)
+	    && terminate_group(pid, pidfd, &status, 1) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
+		containment_failed = 1;
+	}
 
 cleanup:
 	/* Close parent descriptors and contain failures through one ownership exit. */
-	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !leader_reaped)
-		(void)terminate_group(pid, pidfd, &status, 0);
+	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !leader_reaped
+	    && terminate_group(pid, pidfd, &status, 0) < 0) {
+		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+			SPAWN_POSIX_TERMINATE_GROUP, errno);
+		containment_failed = 1;
+	}
+	if (containment_failed) {
+		/* Never resume the manager after losing request-group ownership. */
+		spawn_posix_terminate_current();
+		_exit(CONTAINMENT_FAILURE_EXIT);
+	}
 	active_group = 0;
 	if (pidfd >= 0)
 		(void)close(pidfd);

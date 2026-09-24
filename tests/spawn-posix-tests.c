@@ -27,13 +27,61 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #define SPECIAL_ARGUMENT "space\tquote'\"\\glob*?[$(not-shell)]"
+#define CONTAINMENT_EXIT_STATUS 125
 
 static unsigned int passed;
+/* Test-only linker wrappers inject one precise supervision failure each. */
+static pid_t wrapper_owner = -1;
+static int fail_group_termination_once;
+static int fail_parent_setpgid_once;
+static int interrupt_waitpid_once;
+
+int __real_kill(pid_t pid, int signal);
+int __real_setpgid(pid_t pid, pid_t group);
+pid_t __real_waitpid(pid_t pid, int *status, int options);
+
+/* Fail the first parent-side SIGTERM sent to a request process group. */
+int __wrap_kill(pid_t pid, int signal)
+{
+	if (getpid() == wrapper_owner && pid < 0 && signal == SIGTERM
+	    && fail_group_termination_once) {
+		fail_group_termination_once = 0;
+		errno = EPERM;
+		return -1;
+	}
+	return __real_kill(pid, signal);
+}
+
+/* Fail the first parent-side attempt to establish the request group. */
+int __wrap_setpgid(pid_t pid, pid_t group)
+{
+	if (getpid() == wrapper_owner && pid > 0
+	    && fail_parent_setpgid_once) {
+		fail_parent_setpgid_once = 0;
+		errno = EPERM;
+		return -1;
+	}
+	return __real_setpgid(pid, group);
+}
+
+/* Interrupt the first blocking parent wait selected by one regression. */
+pid_t __wrap_waitpid(pid_t pid, int *status, int options)
+{
+	if (getpid() == wrapper_owner && pid > 0 && options == 0
+	    && interrupt_waitpid_once) {
+		interrupt_waitpid_once = 0;
+		errno = EINTR;
+		return -1;
+	}
+	return __real_waitpid(pid, status, options);
+}
 
 static void fail(const char *message)
 {
@@ -451,6 +499,87 @@ static void test_stream_nofollow(
 	pass("nofollow stream failure");
 }
 
+static void test_interrupted_group_setup_reap(void)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { "/bin/true", NULL };
+	struct spawn_posix_result result;
+	int status;
+	pid_t waited;
+
+	wrapper_owner = getpid();
+	fail_parent_setpgid_once = 1;
+	interrupt_waitpid_once = 1;
+	require(spawn_posix_execute(
+		"/bin/true", arguments, 0, empty_environment, "/", 0, NULL,
+		0, NULL, -1, &result) < 0, "classify group setup failure");
+	wrapper_owner = -1;
+	require(result.kind == SPAWN_POSIX_INTERNAL_ERROR
+		&& result.failure_stage == SPAWN_POSIX_PROCESS_GROUP,
+		"report group setup failure");
+	errno = 0;
+	waited = __real_waitpid(-1, &status, WNOHANG);
+	require(waited < 0 && errno == ECHILD,
+		"interrupted group setup left an unreaped child");
+	pass("EINTR preserves group setup reap ownership");
+}
+
+/* Prove an uncontained group makes its owning manager process fail-stop. */
+static void test_termination_failure_fail_stop(
+	const char *self,
+	const char *pid_path)
+{
+	pid_t supervisor;
+	pid_t descendant;
+	pid_t waited;
+	int descendant_status = 0;
+	int supervisor_status = 0;
+	char *pid_content;
+
+	require(prctl(PR_SET_CHILD_SUBREAPER, 1) == 0,
+		"enable test subreaper");
+	supervisor = fork();
+	require(supervisor >= 0, "fork containment supervisor");
+	if (supervisor == 0) {
+		char *empty_environment[] = { NULL };
+		char *arguments[] = { (char *)self, "fixture", "orphan", NULL };
+		struct spawn_posix_result result;
+
+		wrapper_owner = getpid();
+		fail_group_termination_once = 1;
+		(void)spawn_posix_execute(
+			self, arguments, 0, empty_environment, "/",
+			SPAWN_POSIX_TRUNCATE_FILE, pid_path, 0, NULL, 1000,
+			&result);
+		_exit(96);
+	}
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for containment supervisor");
+	pid_content = read_file(pid_path);
+	descendant = (pid_t)strtol(pid_content, NULL, 10);
+	free(pid_content);
+	require(descendant > 0, "read fail-stop descendant pid");
+	for (int attempt = 0; attempt < 100; ++attempt) {
+		waited = __real_waitpid(descendant, &descendant_status, WNOHANG);
+		if (waited != 0)
+			break;
+		struct timespec pause = { 0, 10 * 1000 * 1000 };
+		(void)nanosleep(&pause, NULL);
+	}
+	if (waited == 0) {
+		(void)__real_kill(descendant, SIGKILL);
+		(void)__real_waitpid(descendant, &descendant_status, 0);
+	}
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) ==
+			CONTAINMENT_EXIT_STATUS,
+		"termination failure did not fail-stop supervisor");
+	require(waited == descendant && WIFSIGNALED(descendant_status)
+		&& WTERMSIG(descendant_status) == SIGKILL,
+		"fail-stop did not kill the uncontained group");
+	pass("termination failure fail-stops group owner");
+}
+
 static void test_timeout_group(
 	const char *self,
 	const char *pid_path)
@@ -548,6 +677,9 @@ int main(int argc, char *argv[], char *envp[])
 	test_exit_and_signal(self);
 	test_error_pipe_duplication(self);
 	test_exec_failure(self);
+	test_termination_failure_fail_stop(self, pid_path);
+	require(unlink(pid_path) == 0, "reset fail-stop pid file");
+	test_interrupted_group_setup_reap();
 	test_request_data(self, root, stdout_path, stderr_path);
 	test_stdin_and_descriptors(self, inherited_fd);
 	test_stream_nofollow(self, symlink_path);
