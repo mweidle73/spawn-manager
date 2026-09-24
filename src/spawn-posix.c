@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -43,6 +44,7 @@
 #define ERROR_FD 3
 /* Exit the manager rather than resume after losing containment ownership. */
 #define CONTAINMENT_FAILURE_EXIT 125
+#define DESCRIPTOR_CEILING_UNINITIALIZED -2
 #define POLL_SLICE_MS 10
 #define TERMINATION_GRACE_MS 100
 
@@ -63,11 +65,11 @@ static volatile sig_atomic_t active_group;
 
 /*
  * The manager opens every persistent descriptor before its request loop.
- * Cache that first complete ceiling for the close_range fallback; per-request
- * descriptors are created only after fork. The normal close_range path still
- * closes the complete live range independently of this value.
+ * Cache one descriptor ceiling for the close_range fallback, using procfs when
+ * available and the process limit otherwise. Per-request descriptors are
+ * created only after fork, so one parent snapshot is enough.
  */
-static int descriptor_ceiling = -1;
+static int descriptor_ceiling = DESCRIPTOR_CEILING_UNINITIALIZED;
 
 /*
  * Subreaper mode makes orphaned in-group descendants waitable by this manager,
@@ -108,6 +110,25 @@ static int64_t monotonic_milliseconds(void)
 	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
 }
 
+/* Return the highest descriptor permitted by the process soft limit. */
+static int limit_descriptor_ceiling(void)
+{
+	struct rlimit limit;
+	rlim_t count;
+
+	if (getrlimit(RLIMIT_NOFILE, &limit) < 0)
+		return -1;
+	count = limit.rlim_cur;
+	if (count == RLIM_INFINITY || count > (rlim_t)INT_MAX) {
+		long open_max = sysconf(_SC_OPEN_MAX);
+
+		if (open_max < 0 || open_max > INT_MAX)
+			return -1;
+		count = (rlim_t)open_max;
+	}
+	return count > 0 ? (int)(count - 1) : ERROR_FD;
+}
+
 /*
  * Convert an absolute monotonic deadline to a poll timeout. A negative
  * deadline remains unlimited, zero means expired, and large values are capped
@@ -130,9 +151,8 @@ static int remaining_milliseconds(int64_t deadline)
 /*
  * Snapshot the finite descriptor range in the parent. This keeps the
  * post-fork fallback used when close_range(2) is unavailable free of directory
- * access and allocation. The manager is single-threaded, and every persistent
- * descriptor exists before the first request, so later requests cannot raise
- * this ceiling in the parent.
+ * access and allocation. Use the process descriptor limit when procfs is not
+ * mounted.
  */
 static int highest_open_descriptor(void)
 {
@@ -142,7 +162,7 @@ static int highest_open_descriptor(void)
 	int scan_fd;
 
 	if (directory == NULL)
-		return -1;
+		return limit_descriptor_ceiling();
 	scan_fd = dirfd(directory);
 	while ((item = readdir(directory)) != NULL) {
 		char *end;
@@ -155,7 +175,7 @@ static int highest_open_descriptor(void)
 			highest = (int)value;
 	}
 	if (closedir(directory) < 0)
-		return -1;
+		return limit_descriptor_ceiling();
 	return highest;
 }
 
@@ -215,7 +235,8 @@ static void reset_signal_mask(void)
 
 /*
  * Close every descriptor above the dedicated error channel. Prefer the kernel
- * range operation and fall back to the parent-prepared finite descriptor bound.
+ * range operation and fall back to a parent-prepared finite descriptor bound;
+ * without either mechanism, report a precise pre-exec failure.
  */
 static void close_child_descriptors(int highest_descriptor)
 {
@@ -225,6 +246,10 @@ static void close_child_descriptors(int highest_descriptor)
 	if (errno != ENOSYS && errno != EINVAL && errno != EPERM)
 		report_child_error(SPAWN_POSIX_CLOSE_DESCRIPTORS);
 #endif
+	if (highest_descriptor < ERROR_FD + 1) {
+		errno = ENOSYS;
+		report_child_error(SPAWN_POSIX_CLOSE_DESCRIPTORS);
+	}
 	for (int fd = ERROR_FD + 1; fd <= highest_descriptor; ++fd)
 		(void)close(fd);
 }
@@ -570,15 +595,8 @@ int spawn_posix_execute(
 			SPAWN_POSIX_CREATE_ERROR_PIPE, errno);
 		return -1;
 	}
-	if (descriptor_ceiling < 0) {
+	if (descriptor_ceiling == DESCRIPTOR_CEILING_UNINITIALIZED) {
 		descriptor_ceiling = highest_open_descriptor();
-		if (descriptor_ceiling < 0) {
-			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
-				SPAWN_POSIX_CREATE_ERROR_PIPE, errno);
-			(void)close(error_pipe[0]);
-			(void)close(error_pipe[1]);
-			return -1;
-		}
 	}
 	highest_descriptor = descriptor_ceiling;
 
@@ -739,8 +757,9 @@ int spawn_posix_execute(
 
 cleanup:
 	/* Close parent descriptors and contain failures through one ownership exit. */
-	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !leader_reaped
-	    && terminate_group(pid, pidfd, &status, 0) < 0) {
+	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !containment_failed
+	    && (!leader_reaped || process_group_exists(pid))
+	    && terminate_group(pid, pidfd, &status, leader_reaped) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 		containment_failed = 1;

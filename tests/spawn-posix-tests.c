@@ -18,6 +18,7 @@
 
 #include "spawn-posix.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -41,8 +42,11 @@ static unsigned int passed;
 static pid_t wrapper_owner = -1;
 static int fail_group_termination_once;
 static int fail_parent_setpgid_once;
+static int fail_proc_scan_once;
 static int interrupt_waitpid_once;
+static const char *group_setup_wait_path;
 
+DIR *__real_opendir(const char *path);
 int __real_kill(pid_t pid, int signal);
 int __real_setpgid(pid_t pid, pid_t group);
 pid_t __real_waitpid(pid_t pid, int *status, int options);
@@ -59,11 +63,34 @@ int __wrap_kill(pid_t pid, int signal)
 	return __real_kill(pid, signal);
 }
 
+/* Hide /proc/self/fd once so close_range must carry descriptor cleanup. */
+DIR *__wrap_opendir(const char *path)
+{
+	if (getpid() == wrapper_owner && fail_proc_scan_once
+	    && strcmp(path, "/proc/self/fd") == 0) {
+		fail_proc_scan_once = 0;
+		errno = ENOENT;
+		return NULL;
+	}
+	return __real_opendir(path);
+}
+
 /* Fail the first parent-side attempt to establish the request group. */
 int __wrap_setpgid(pid_t pid, pid_t group)
 {
 	if (getpid() == wrapper_owner && pid > 0
 	    && fail_parent_setpgid_once) {
+		if (group_setup_wait_path != NULL) {
+			for (int attempt = 0; attempt < 100; ++attempt) {
+				struct stat status;
+				struct timespec pause = { 0, 10 * 1000 * 1000 };
+
+				if (stat(group_setup_wait_path, &status) == 0
+				    && status.st_size > 0)
+					break;
+				(void)nanosleep(&pause, NULL);
+			}
+		}
 		fail_parent_setpgid_once = 0;
 		errno = EPERM;
 		return -1;
@@ -524,6 +551,63 @@ static void test_interrupted_group_setup_reap(void)
 	pass("EINTR preserves group setup reap ownership");
 }
 
+static void test_no_proc_descriptor_cleanup(void)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { "/bin/true", NULL };
+	struct spawn_posix_result result;
+
+	wrapper_owner = getpid();
+	fail_proc_scan_once = 1;
+	require(spawn_posix_execute(
+		"/bin/true", arguments, 0, empty_environment, "/", 0, NULL,
+		0, NULL, -1, &result) == 0, "execute without proc descriptor scan");
+	wrapper_owner = -1;
+	require_exited(&result, 0, "close_range without proc descriptor scan");
+	pass("descriptor cleanup without procfs");
+}
+
+static void test_group_setup_failure_descendants(
+	const char *self,
+	const char *pid_path)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { (char *)self, "fixture", "orphan", NULL };
+	struct spawn_posix_result result;
+	char *pid_content;
+	pid_t descendant;
+	pid_t waited;
+	int descendant_status = 0;
+	int wait_errno;
+
+	wrapper_owner = getpid();
+	group_setup_wait_path = pid_path;
+	fail_parent_setpgid_once = 1;
+	require(spawn_posix_execute(
+		self, arguments, 0, empty_environment, "/",
+		SPAWN_POSIX_TRUNCATE_FILE, pid_path, 0, NULL, -1,
+		&result) < 0, "classify group setup descendant failure");
+	group_setup_wait_path = NULL;
+	wrapper_owner = -1;
+	require(result.kind == SPAWN_POSIX_INTERNAL_ERROR
+		&& result.failure_stage == SPAWN_POSIX_PROCESS_GROUP,
+		"report group setup descendant failure");
+	pid_content = read_file(pid_path);
+	descendant = (pid_t)strtol(pid_content, NULL, 10);
+	free(pid_content);
+	require(descendant > 0, "read group setup descendant pid");
+	errno = 0;
+	waited = __real_waitpid(descendant, &descendant_status, WNOHANG);
+	wait_errno = errno;
+	if (waited == 0) {
+		(void)__real_kill(descendant, SIGKILL);
+		(void)__real_waitpid(descendant, &descendant_status, 0);
+	}
+	require(waited < 0 && wait_errno == ECHILD,
+		"group setup failure left a descendant behind");
+	pass("group setup failure contains descendants");
+}
+
 /* Prove an uncontained group makes its owning manager process fail-stop. */
 static void test_termination_failure_fail_stop(
 	const char *self,
@@ -674,12 +758,15 @@ int main(int argc, char *argv[], char *envp[])
 	inherited_fd = fcntl(source_fd, F_DUPFD, 100);
 	require(inherited_fd >= 100, "duplicate descriptor fixture");
 
+	test_no_proc_descriptor_cleanup();
 	test_exit_and_signal(self);
 	test_error_pipe_duplication(self);
 	test_exec_failure(self);
 	test_termination_failure_fail_stop(self, pid_path);
 	require(unlink(pid_path) == 0, "reset fail-stop pid file");
 	test_interrupted_group_setup_reap();
+	test_group_setup_failure_descendants(self, pid_path);
+	require(unlink(pid_path) == 0, "reset group setup descendant pid file");
 	test_request_data(self, root, stdout_path, stderr_path);
 	test_stdin_and_descriptors(self, inherited_fd);
 	test_stream_nofollow(self, symlink_path);

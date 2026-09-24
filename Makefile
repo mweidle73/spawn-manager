@@ -5,7 +5,8 @@ LIBDIR = lib
 OBJDIR = obj
 COVDIR = $(OBJDIR)/cov
 POSIX_TEST = $(OBJDIR)/spawn_posix_tests
-POSIX_TEST_LDFLAGS = -Wl,--wrap=kill -Wl,--wrap=setpgid -Wl,--wrap=waitpid
+POSIX_TEST_LDFLAGS = -Wl,--wrap=kill -Wl,--wrap=opendir \
+	-Wl,--wrap=setpgid -Wl,--wrap=waitpid
 PROTOCOL_FAILURE_MANAGER = $(OBJDIR)/protocol_failure_manager
 
 VERSION_SPEC := src/spawn-version.ads
