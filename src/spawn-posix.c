@@ -326,6 +326,8 @@ static void child_exec(
 	reset_signal_handlers();
 	if (setpgid(0, 0) < 0)
 		report_child_error(SPAWN_POSIX_PROCESS_GROUP);
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1L, 0L, 0L, 0L) < 0)
+		report_child_error(SPAWN_POSIX_PARENT_DEATH);
 	if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0)
 		report_child_error(SPAWN_POSIX_PARENT_DEATH);
 	if (getppid() != expected_parent) {

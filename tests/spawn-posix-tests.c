@@ -228,6 +228,35 @@ static char *read_file(const char *path)
 	return content;
 }
 
+/* Create one root-owned set-user-ID copy for the containment exec oracle. */
+static void create_setuid_copy(const char *source, const char *target)
+{
+	char buffer[4096];
+	int input;
+	int output;
+	ssize_t count;
+
+	input = open(source, O_RDONLY);
+	require(input >= 0, "open setuid fixture source");
+	output = open(target, O_WRONLY | O_CREAT | O_EXCL, 0700);
+	require(output >= 0, "create setuid fixture target");
+	while ((count = read(input, buffer, sizeof(buffer))) > 0) {
+		ssize_t offset = 0;
+
+		while (offset < count) {
+			ssize_t written = write(
+				output, buffer + offset, (size_t)(count - offset));
+
+			require(written > 0, "write setuid fixture target");
+			offset += written;
+		}
+	}
+	require(count == 0, "read setuid fixture source");
+	require(fchmod(output, 04755) == 0, "mark setuid fixture target");
+	require(close(output) == 0 && close(input) == 0,
+		"close setuid fixture files");
+}
+
 static void require_exited(
 	const struct spawn_posix_result *result,
 	int status,
@@ -400,6 +429,23 @@ static int fixture(int argc, char *argv[], char *envp[])
 		return fixture_tree();
 	if (strcmp(argv[2], "orphan") == 0)
 		return fixture_orphan();
+	if (strcmp(argv[2], "containment") == 0) {
+		int parent_signal = 0;
+		char *end;
+		long expected_uid;
+
+		if (argc != 4)
+			return 97;
+		errno = 0;
+		expected_uid = strtol(argv[3], &end, 10);
+		if (errno != 0 || *end != '\0' || expected_uid != geteuid())
+			return 98;
+		if (prctl(PR_GET_PDEATHSIG, &parent_signal) < 0
+		    || parent_signal != SIGKILL)
+			return 99;
+		return prctl(PR_GET_NO_NEW_PRIVS, 0L, 0L, 0L, 0L) == 1
+			? 0 : 100;
+	}
 	return 90;
 }
 
@@ -424,6 +470,58 @@ static void test_exit_and_signal(const char *self)
 		NULL, INT64_MAX, &result) == 0, "execute maximum-timeout fixture");
 	require_exited(&result, 37, "maximum timeout result");
 	pass("exact exit and signal results");
+}
+
+static void test_child_containment_state(const char *self)
+{
+	char *empty_environment[] = { NULL };
+	char uid_text[32];
+	char *arguments[] = {
+		(char *)self, "fixture", "containment", uid_text, NULL
+	};
+	struct spawn_posix_result result;
+
+	require(snprintf(uid_text, sizeof(uid_text), "%ld", (long)geteuid())
+		< (int)sizeof(uid_text), "format containment uid");
+	require(spawn_posix_execute(
+		self, arguments, 0, empty_environment, "/", 0, NULL, 0, NULL,
+		1000, &result) == 0, "execute child containment fixture");
+	require_exited(&result, 0, "child containment state");
+	if (geteuid() == 0) {
+		char target[PATH_MAX];
+		pid_t supervisor;
+		int supervisor_status;
+
+		require(snprintf(target, sizeof(target),
+			"/tmp/spawn-posix-setuid-%ld", (long)getpid())
+			< (int)sizeof(target), "construct setuid fixture path");
+		(void)unlink(target);
+		create_setuid_copy(self, target);
+		supervisor = fork();
+		require(supervisor >= 0, "fork setuid containment supervisor");
+		if (supervisor == 0) {
+			char *setuid_arguments[] = {
+				target, "fixture", "containment", "65534", NULL
+			};
+			struct spawn_posix_result setuid_result;
+
+			if (setgid(65534) < 0 || setuid(65534) < 0)
+				_exit(101);
+			_exit(spawn_posix_execute(
+				target, setuid_arguments, 0, empty_environment, "/",
+				0, NULL, 0, NULL, 1000, &setuid_result) == 0
+				&& setuid_result.kind == SPAWN_POSIX_EXITED
+				&& setuid_result.exit_status == 0 ? 0 : 102);
+		}
+		require(__real_waitpid(
+			supervisor, &supervisor_status, 0) == supervisor,
+			"wait for setuid containment supervisor");
+		require(unlink(target) == 0, "remove setuid fixture target");
+		require(WIFEXITED(supervisor_status)
+			&& WEXITSTATUS(supervisor_status) == 0,
+			"setuid exec lost parent-death containment");
+	}
+	pass("child preserves parent-death containment");
 }
 
 static void test_error_pipe_duplication(const char *self)
@@ -984,6 +1082,7 @@ int main(int argc, char *argv[], char *envp[])
 
 	test_no_proc_descriptor_cleanup();
 	test_pidfd_fallback();
+	test_child_containment_state(self);
 	test_exit_and_signal(self);
 	test_error_pipe_duplication(self);
 	test_exec_failure(self);
