@@ -5,6 +5,17 @@ calling `fork(2)` from the application's tasking runtime. The application
 starts a pool of dedicated manager processes early; later requests cross a
 Unix-domain socket, and only a selected manager performs `fork` and `execve`.
 
+## Motivation
+
+> If the parent is using tasking, and needs to spawn subprocesses at arbitrary
+> times, one technique is for the parent to spawn (very early) a particular
+> spawn-manager subprocess whose job is to spawn other processes. The
+> spawn-manager avoids tasking. The parent sends messages to the spawn-manager
+> requesting it to spawn processes, using whatever inter-process communication
+> mechanism you like, such as sockets.
+>
+> — *GNAT Compiler Components, `System.OS_Lib` specification*
+
 The project provides two request styles:
 
 - a compatible command-string API that executes
