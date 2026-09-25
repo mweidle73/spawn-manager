@@ -17,6 +17,11 @@ ____
 
 The Ada spawn manager uses UNIX domain sockets provided by the Anet library to
 implement fast and simple IPC.
+GNAT implements the manager's attached SIGINT and SIGTERM handlers with
+interrupt-server tasks. The manager therefore has one request executor but is
+not a single-threaded process; its C ownership guard serializes those runtime
+tasks with the fork and reap transitions. The post-`fork` child still enters no
+Ada runtime code before `execve` or `_exit`.
 
 Process execution
 -----------------
@@ -95,11 +100,16 @@ The version 1 API has no independent single-request cancellation operation;
 `Cleanup` cancels the complete pool.
 
 Normal leader exit also terminates and reaps any remaining member of the
-request group before its exit or signal result is returned. If that containment
-cannot complete, the manager makes one final group-kill attempt and fail-stops
-instead of resuming without ownership. The pool observes the lost connection
+request group before its exit or signal result is returned. If group signaling
+or leader reaping fails before the identity is retired, the manager makes one
+final group-kill attempt and fail-stops instead of resuming without ownership.
+A descendant-reap failure after retirement also fail-stops, but does not signal
+the now reusable numeric identity again. The pool observes the lost connection
 as a protocol failure and poisons every manager. This prevents background
 descendants from crossing the lease boundary into a later request.
+Leader and descendant reaping after termination each have a fixed grace-period
+deadline; an uninterruptible child therefore fail-stops its manager instead of
+blocking pool cancellation indefinitely.
 
 The leader remains unreaped until all request-group signals have been sent,
 so its numeric process-group identity cannot be recycled into an unrelated
@@ -133,9 +143,10 @@ Stages which can represent manager-side supervision therefore poison the
 complete pool, including the ambiguous error-pipe and process-group stages.
 Stages which can only be child-side pre-exec failures remain reusable.
 
-A descendant which deliberately calls `setsid()` can leave the request process
-group; containing that case requires the separately selected cgroup policy and
-is not claimed by the process-group fallback.
+A descendant which deliberately changes process group or session with
+`setpgid()` or `setsid()` can leave the request process group; containing that
+case requires the separately selected cgroup policy and is not claimed by the
+process-group fallback.
 
 Frame writes and completion after the first byte have a fixed monotonic
 five-second deadline. For a finite child timeout, the first result byte is
@@ -143,18 +154,20 @@ bounded by that timeout plus the transport allowance. An intentionally
 unlimited child also has an unlimited first-result-byte wait because version 1
 does not add a heartbeat protocol.
 
-A small C module is the only post-`fork` boundary. It blocks manager
-termination signals across `fork` and process-group publication; the child
-restores default `SIGINT` and `SIGTERM` dispositions before clearing its signal
-mask. It then performs child-only working-directory and descriptor setup,
-calls `execve`, reports pre-exec `errno`, waits for the exact status and owns
-timeout cleanup. The parent accepts a `/proc/self/fd` descriptor bound only
-after a complete scan; any open, read or close error selects the finite soft
-descriptor-limit fallback before `fork`.
-The attached manager signal handler invokes the C containment hook before its
-best-effort Ada logging and socket cleanup, then exits immediately. Log or
-socket-close failures therefore cannot bypass active-group termination or OS
-exit, while the explicit listener close retains socket-path cleanup.
+A small C module is the only post-`fork` boundary. It gives the forked child a
+blocked termination-signal mask; the child restores default `SIGINT` and
+`SIGTERM` dispositions before clearing that mask. A process-local ownership
+mutex synchronizes the manager main task with GNAT's separate interrupt-server
+tasks
+across fork publication and exact leader reaping. The child then performs
+child-only working-directory and descriptor setup, calls `execve`, reports
+pre-exec `errno`, waits for the exact status and owns timeout cleanup. The
+parent accepts a `/proc/self/fd` descriptor bound only after a complete scan;
+any open, read or close error selects the finite soft descriptor-limit fallback
+before `fork`.
+The attached manager signal handler invokes only the synchronized C containment
+hook and immediate OS exit. The pool owns socket-path cleanup after the manager
+has terminated.
 Protocol handling, request construction, policy, diagnostics and pool state
 remain Ada. Comments in the C module document the operations which are safe
 between `fork` and `execve` and the ownership of every child cleanup path.

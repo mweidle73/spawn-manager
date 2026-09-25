@@ -21,9 +21,9 @@ signals_body=$source_root/tools/spawn-signals.adb
 signals_spec=$source_root/tools/spawn-signals.ads
 manager_body=$source_root/tools/spawn_manager.adb
 
-# The attached handler cannot recover from an exception. Contain the active
-# group first, keep fallible socket cleanup in one best-effort block and then
-# exit without any further operation which can raise.
+# The attached handler runs in a GNAT interrupt-server task. Keep it to the
+# synchronized C containment hook and immediate process exit; the pool owns
+# socket-path cleanup after the manager has terminated.
 actual=$(
 	awk '
 		/^[[:space:]]*procedure Handle_Signal$/ { handler = 1 }
@@ -41,14 +41,6 @@ actual=$(
 	sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 )
 expected='Terminate_Current;
-begin
-pragma Debug
-(Logger.Log_File ("Signal received - shutting down"));
-Socket_L.Close;
-Socket_C.Close;
-exception
-when others => null;
-end;
 GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));'
 
 if test "$actual" != "$expected"; then

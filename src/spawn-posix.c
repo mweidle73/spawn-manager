@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -57,11 +58,16 @@
 extern char **environ;
 
 /*
- * The manager is single-threaded and executes one request at a time. The
- * signal handler only reads this process-group id and calls kill(2), so
- * sig_atomic_t is sufficient and no policy state crosses the C boundary.
+ * The manager executes one request at a time, but GNAT dispatches attached
+ * signals from separate interrupt-server tasks. This lock serializes those
+ * tasks with fork publication and the exact leader-reap transition. The child
+ * inherits a locked mutex across fork but never touches it before exec or exit.
+ * A server task has maximum interrupt priority, so it must sleep on a mutex
+ * instead of spinning while the request executor completes a transition.
  */
-static volatile sig_atomic_t active_group;
+static pthread_mutex_t group_state_lock = PTHREAD_MUTEX_INITIALIZER;
+static pid_t active_group;
+static int shutdown_requested;
 
 /*
  * The manager opens every persistent descriptor before its request loop.
@@ -75,7 +81,7 @@ static int descriptor_ceiling = DESCRIPTOR_CEILING_UNINITIALIZED;
  * Subreaper mode makes orphaned in-group descendants waitable by this manager,
  * so termination can reap the complete request group instead of only its
  * leader. It is process-wide and therefore enabled once in this single-
- * threaded manager.
+ * request executor.
  */
 static int subreaper_enabled;
 
@@ -83,6 +89,22 @@ struct child_error {
 	int stage;
 	int error_number;
 };
+
+/* Acquire the small cross-task process-group ownership lock. */
+static void lock_group_state(void)
+{
+	int error = pthread_mutex_lock(&group_state_lock);
+
+	if (error != 0)
+		_exit(CONTAINMENT_FAILURE_EXIT);
+}
+
+/* Release the process-group ownership lock after publishing a full state. */
+static void unlock_group_state(void)
+{
+	if (pthread_mutex_unlock(&group_state_lock) != 0)
+		_exit(CONTAINMENT_FAILURE_EXIT);
+}
 
 /* Initialize the complete result record for one terminal outcome. */
 static void set_result(
@@ -231,8 +253,8 @@ static int open_output_file(int mode, const char *path)
 	return -1;
 }
 
-/* Block manager termination signals across fork and group publication. */
-static int block_manager_signals(sigset_t *original_mask)
+/* Give the forked child a blocked mask until it installs safe dispositions. */
+static int block_child_signals(sigset_t *original_mask)
 {
 	sigset_t mask;
 
@@ -499,31 +521,75 @@ static int observe_leader(
 }
 
 /*
- * Reap an already observed leader and retire its published group identity as
- * one signal-atomic transition. Failure leaves the identity published unless
- * waitpid proved the leader was collected, so the caller can fail-stop safely.
+ * Reap an already observed leader and retire its published group identity
+ * while excluding the GNAT interrupt-server task. Failure leaves the identity
+ * published unless waitpid proved that the exact leader was collected or that
+ * no waitable leader remains.
  */
 static int reap_observed_leader(pid_t pid, int *status)
 {
-	sigset_t original_mask;
 	pid_t waited;
 	int wait_error;
 
-	if (block_manager_signals(&original_mask) < 0)
-		return -1;
+	lock_group_state();
 	do {
 		waited = waitpid(pid, status, 0);
 	} while (waited < 0 && errno == EINTR);
 	wait_error = waited < 0 ? errno : ECHILD;
-	if (waited == pid)
+	if ((waited == pid || (waited < 0 && wait_error == ECHILD))
+	    && active_group == pid)
 		active_group = 0;
-	if (sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0)
-		return -1;
+	unlock_group_state();
 	if (waited != pid) {
 		errno = wait_error;
 		return -1;
 	}
 	return 0;
+}
+
+/*
+ * Reap a killed leader within one grace period and retire its group identity.
+ */
+static int reap_terminated_leader(
+	pid_t pid,
+	int *status,
+	int *leader_reaped)
+{
+	int64_t deadline = monotonic_milliseconds() + TERMINATION_GRACE_MS;
+
+	for (;;) {
+		pid_t waited;
+		int wait_error;
+
+		/*
+		 * waitpid and identity retirement share the mutex so the shutdown task
+		 * either signals the still-pinned group first or observes no group.
+		 */
+		lock_group_state();
+		waited = waitpid(pid, status, WNOHANG);
+		wait_error = waited < 0 ? errno : ECHILD;
+		if (waited == pid || (waited < 0 && wait_error == ECHILD)) {
+			active_group = 0;
+			*leader_reaped = 1;
+		}
+		unlock_group_state();
+		if (waited == pid || (waited < 0 && wait_error == ECHILD))
+			return 0;
+		if (waited < 0 && wait_error != EINTR) {
+			errno = wait_error;
+			return -1;
+		}
+		if (remaining_milliseconds(deadline) == 0) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		{
+			struct timespec pause = {
+				0, POLL_SLICE_MS * 1000 * 1000
+			};
+			(void)nanosleep(&pause, NULL);
+		}
+	}
 }
 
 /* Reap adopted group members until none remain or the deadline fails. */
@@ -552,12 +618,24 @@ static int reap_group(pid_t group, int64_t deadline)
  * Terminate one request group while its unreaped leader pins the numeric group
  * identity. Optional grace is reserved for timeout and error cleanup; normal
  * post-exit cleanup sends both signals immediately. Stop publishing the group
- * before reaping can make its number reusable. A setsid descendant is outside
- * this contract and requires the separate cgroup policy.
+ * before reaping can make its number reusable. A descendant which changes its
+ * process group or session is outside this contract and requires cgroup policy.
  */
-static int terminate_group(pid_t pid, int *leader_status, int allow_grace)
+static int terminate_group(
+	pid_t pid,
+	int *leader_status,
+	int allow_grace,
+	int *leader_reaped)
 {
 	int64_t deadline;
+
+	lock_group_state();
+	if (active_group != pid) {
+		unlock_group_state();
+		errno = ECHILD;
+		return -1;
+	}
+	unlock_group_state();
 
 	if (kill(-pid, SIGTERM) < 0 && errno != ESRCH)
 		return -1;
@@ -570,30 +648,29 @@ static int terminate_group(pid_t pid, int *leader_status, int allow_grace)
 	}
 	if (kill(-pid, SIGKILL) < 0 && errno != ESRCH)
 		return -1;
-	active_group = 0;
-	{
-		pid_t waited;
-		do {
-			waited = waitpid(pid, leader_status, 0);
-		} while (waited < 0 && errno == EINTR);
-		if (waited < 0 && errno != ECHILD)
-			return -1;
-	}
+	if (reap_terminated_leader(
+		pid, leader_status, leader_reaped) < 0)
+		return -1;
 	return reap_group(
 		pid, monotonic_milliseconds() + TERMINATION_GRACE_MS);
 }
 
 /*
- * Async-signal-safe manager hook: kill the active request group and preserve
- * the interrupted code's errno. Normal execution still owns all reaping.
+ * GNAT interrupt-task hook: prevent a later fork, kill the currently published
+ * request group and preserve errno. The Ada handler exits the manager after
+ * this returns; normal execution remains the sole reaper meanwhile.
  */
 void spawn_posix_terminate_current(void)
 {
 	int saved_errno = errno;
-	sig_atomic_t group = active_group;
+	pid_t group;
 
+	lock_group_state();
+	shutdown_requested = 1;
+	group = active_group;
 	if (group > 0)
-		(void)kill(-(pid_t)group, SIGKILL);
+		(void)kill(-group, SIGKILL);
+	unlock_group_state();
 	errno = saved_errno;
 }
 
@@ -660,7 +737,17 @@ int spawn_posix_execute(
 		descriptor_ceiling = highest_open_descriptor();
 	}
 	highest_descriptor = descriptor_ceiling;
-	if (block_manager_signals(&original_signal_mask) < 0) {
+	lock_group_state();
+	if (shutdown_requested) {
+		unlock_group_state();
+		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+			SPAWN_POSIX_TERMINATE_GROUP, ECANCELED);
+		(void)close(error_pipe[0]);
+		(void)close(error_pipe[1]);
+		return -1;
+	}
+	if (block_child_signals(&original_signal_mask) < 0) {
+		unlock_group_state();
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_RESET_SIGNALS, errno);
 		(void)close(error_pipe[0]);
@@ -682,12 +769,14 @@ int spawn_posix_execute(
 		int fork_errno = errno;
 
 		if (sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0) {
+			unlock_group_state();
 			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 				SPAWN_POSIX_RESET_SIGNALS, errno);
 			(void)close(error_pipe[0]);
 			(void)close(error_pipe[1]);
 			return -1;
 		}
+		unlock_group_state();
 		set_result(result, SPAWN_POSIX_SPAWN_FAILED, -1, 0,
 			SPAWN_POSIX_FORK, fork_errno);
 		(void)close(error_pipe[0]);
@@ -695,9 +784,10 @@ int spawn_posix_execute(
 		return 0;
 	}
 	(void)close(error_pipe[1]);
-	active_group = (sig_atomic_t)pid;
 	if (setpgid(pid, pid) < 0 && errno != EACCES && errno != ESRCH)
 		group_setup_error = errno;
+	active_group = pid;
+	unlock_group_state();
 	if (sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_RESET_SIGNALS, errno);
@@ -755,12 +845,13 @@ int spawn_posix_execute(
 	case 1:
 		break;
 	case 0:
-		if (terminate_group(pid, &status, 1) < 0) {
+		if (terminate_group(pid, &status, 1, &leader_reaped) < 0) {
 			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 				SPAWN_POSIX_TERMINATE_GROUP, errno);
+			if (leader_reaped)
+				containment_failed = 1;
 			goto cleanup;
 		}
-		leader_reaped = 1;
 		set_result(result, SPAWN_POSIX_TIMED_OUT, -1, 0,
 			SPAWN_POSIX_NO_FAILURE, 0);
 		goto cleanup;
@@ -775,12 +866,14 @@ int spawn_posix_execute(
 		int waited = observe_leader(
 			pid, pidfd, deadline, &leader_information);
 		if (waited == 0) {
-			if (terminate_group(pid, &status, 1) < 0) {
+			if (terminate_group(
+				pid, &status, 1, &leader_reaped) < 0) {
 				set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 					SPAWN_POSIX_TERMINATE_GROUP, errno);
+				if (leader_reaped)
+					containment_failed = 1;
 				goto cleanup;
 			}
-			leader_reaped = 1;
 			set_result(result, SPAWN_POSIX_TIMED_OUT, -1, 0,
 				SPAWN_POSIX_NO_FAILURE, 0);
 			goto cleanup;
@@ -835,17 +928,17 @@ int spawn_posix_execute(
 	 * Phase 6: a terminal leader may leave descendants in its group. Terminate
 	 * and reap them before allowing that leader result to cross the boundary.
 	 */
-	if (terminate_group(pid, &status, 0) < 0) {
+	if (terminate_group(pid, &status, 0, &leader_reaped) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 		containment_failed = 1;
-	} else
-		leader_reaped = 1;
+	}
 
 cleanup:
 	/* Close parent descriptors and contain failures through one ownership exit. */
 	if (result->kind == SPAWN_POSIX_INTERNAL_ERROR && !containment_failed
-	    && !leader_reaped && terminate_group(pid, &status, 1) < 0) {
+	    && !leader_reaped
+	    && terminate_group(pid, &status, 1, &leader_reaped) < 0) {
 		set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 			SPAWN_POSIX_TERMINATE_GROUP, errno);
 		containment_failed = 1;
@@ -858,7 +951,12 @@ cleanup:
 	if (manager_signals_blocked
 	    && sigprocmask(SIG_SETMASK, &original_signal_mask, NULL) < 0)
 		_exit(CONTAINMENT_FAILURE_EXIT);
-	active_group = 0;
+	lock_group_state();
+	if (active_group != 0) {
+		unlock_group_state();
+		_exit(CONTAINMENT_FAILURE_EXIT);
+	}
+	unlock_group_state();
 	if (pidfd >= 0)
 		(void)close(pidfd);
 	(void)close(error_pipe[0]);

@@ -29,22 +29,17 @@
 
 with Ada.Interrupts.Names;
 
-with Anet.Sockets.Unix;
-
 package Spawn.Signals is
 
-   protected type Exit_Handler_Type
-     (Socket_L : access Anet.Sockets.Unix.TCP_Socket_Type;
-      Socket_C : access Anet.Sockets.Unix.TCP_Socket_Type)
-   is
+   protected type Exit_Handler_Type is
    private
       procedure Handle_Signal;
-      --  Contain the active group before best-effort socket cleanup and exit.
+      --  Contain the active group before immediate process exit.
 
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGINT);
       pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGTERM);
    end Exit_Handler_Type;
-   --  Handler which contains the current request and exits on SIGTERM or
-   --  SIGINT.
+   --  GNAT dispatches attached signals from interrupt-server tasks. The C
+   --  hook therefore synchronizes with the manager's executing main task.
 
 end Spawn.Signals;

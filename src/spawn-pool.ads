@@ -68,6 +68,8 @@ package Spawn.Pool is
    --  relative on the wire to protect the AF_UNIX length budget; Init
    --  separately captures its absolute spelling so later directory changes
    --  cannot break cleanup.
+   --  Init and Cleanup are lifecycle operations and must be caller-serialized;
+   --  Execute is task-safe after Init has completed.
 
    procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
    --  Leave the selected long-lived manager in its current process context.

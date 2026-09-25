@@ -7,7 +7,8 @@ COVDIR = $(OBJDIR)/cov
 POSIX_TEST = $(OBJDIR)/spawn_posix_tests
 POSIX_TEST_LDFLAGS = -Wl,--wrap=kill -Wl,--wrap=opendir \
 	-Wl,--wrap=readdir \
-	-Wl,--wrap=setpgid -Wl,--wrap=syscall -Wl,--wrap=waitpid
+	-Wl,--wrap=fork -Wl,--wrap=setpgid -Wl,--wrap=syscall \
+	-Wl,--wrap=waitpid -pthread
 PROTOCOL_FAILURE_MANAGER = $(OBJDIR)/protocol_failure_manager
 
 VERSION_SPEC := src/spawn-version.ads
@@ -39,7 +40,7 @@ $(VERSION_SPEC): .version
 
 $(POSIX_TEST): tests/spawn-posix-tests.c src/spawn-posix.c src/spawn-posix.h
 	@mkdir -p $(OBJDIR)
-	$(CC) -std=c11 -W -Wall -Wextra -Werror -O2 -Isrc \
+	$(CC) -std=c11 -W -Wall -Wextra -Werror -O2 -pthread -Isrc \
 		$(POSIX_TEST_LDFLAGS) -o $@ \
 		tests/spawn-posix-tests.c src/spawn-posix.c
 

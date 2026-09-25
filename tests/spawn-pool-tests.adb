@@ -449,6 +449,37 @@ package body Spawn.Pool.Tests is
         & Current_Directory & "/" & Dir & "/";
 
       Initialized : Boolean := False;
+      Socket_Paths : array (1 .. 2) of Unbounded_String;
+
+      procedure Capture_Socket_Paths;
+      --  Preserve the two logged paths before injected deletion leaves them.
+
+      procedure Capture_Socket_Paths
+      is
+         Prefix : constant String := "Forked manager ";
+         Source : constant String := To_String (Test_Buffer);
+         Next   : Positive := Source'First;
+      begin
+         for Path of Socket_Paths loop
+            declare
+               First : constant Natural := Ada.Strings.Fixed.Index
+                 (Source  => Source,
+                  Pattern => Prefix,
+                  From    => Next);
+               Last : constant Natural := Ada.Strings.Fixed.Index
+                 (Source  => Source,
+                  Pattern => (1 => ASCII.LF),
+                  From    => First + Prefix'Length);
+            begin
+               Assert
+                 (Condition => First > 0 and then Last > First,
+                  Message   => "manager socket path was not logged");
+               Path := To_Unbounded_String
+                 (Source (First + Prefix'Length .. Last - 1));
+               Next := Last + 1;
+            end;
+         end loop;
+      end Capture_Socket_Paths;
 
       procedure Remove_Test_Directory;
       --  Remove the socket-deletion fixture after pool cleanup completes.
@@ -456,6 +487,15 @@ package body Spawn.Pool.Tests is
       procedure Remove_Test_Directory
       is
       begin
+         for Path of Socket_Paths loop
+            if Path /= Null_Unbounded_String then
+               begin
+                  Anet.OS.Delete_File (Filename => To_String (Path));
+               exception
+                  when Anet.OS.IO_Error => null;
+               end;
+            end if;
+         end loop;
          if Exists (Name => Dir) then
             Delete_Tree (Directory => Dir);
          end if;
@@ -468,6 +508,7 @@ package body Spawn.Pool.Tests is
                        Socket_Dir    => Dir,
                        Log           => Test_Log'Access);
       Initialized := True;
+      Capture_Socket_Paths;
 
       Socket_File_Delete := Raise_Delete_Error'Access;
 
@@ -1418,8 +1459,14 @@ package body Spawn.Pool.Tests is
         (Routine => Invalid_Manager_Path'Access,
          Name    => "Reject relative manager path");
       T.Add_Test_Routine
+        (Routine => Invalid_Manager_Path_Nul'Access,
+         Name    => "Reject NUL in manager path");
+      T.Add_Test_Routine
         (Routine => Invalid_Socket_Directory'Access,
          Name    => "Invalid socket directory");
+      T.Add_Test_Routine
+        (Routine => Invalid_Socket_Directory_Nul'Access,
+         Name    => "Reject NUL in socket directory");
       T.Add_Test_Routine
         (Routine => Invalid_Socket_Path'Access,
          Name    => "Invalid socket path");
@@ -1456,6 +1503,18 @@ package body Spawn.Pool.Tests is
    exception
       when Spawn.Pool.Pool_Error => null;
    end Invalid_Manager_Path;
+
+   -------------------------------------------------------------------------
+
+   procedure Invalid_Manager_Path_Nul
+   is
+   begin
+      Spawn.Pool.Init
+        (Manager_Path => "/bin/true" & ASCII.NUL & "ignored");
+      Fail (Message => "NUL-terminated manager path accepted");
+   exception
+      when Spawn.Pool.Pool_Error => null;
+   end Invalid_Manager_Path_Nul;
 
    -------------------------------------------------------------------------
 
@@ -1575,6 +1634,20 @@ package body Spawn.Pool.Tests is
    exception
       when Spawn.Pool.Pool_Error => null;
    end Invalid_Socket_Directory;
+
+   -------------------------------------------------------------------------
+
+   procedure Invalid_Socket_Directory_Nul
+   is
+   begin
+      Spawn.Pool.Init
+        (Manager_Path => Manager_Path,
+         Socket_Dir   => Ada.Directories.Current_Directory
+           & ASCII.NUL & "ignored");
+      Fail (Message => "NUL-terminated socket directory accepted");
+   exception
+      when Spawn.Pool.Pool_Error => null;
+   end Invalid_Socket_Directory_Nul;
 
    -------------------------------------------------------------------------
 

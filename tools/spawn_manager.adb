@@ -117,9 +117,7 @@ is
         (Descriptor => Listener.Get_Socket);
 
       declare
-         Signal_Handler : Spawn.Signals.Exit_Handler_Type
-           (Socket_L => Listener'Access,
-            Socket_C => Connection'Access);
+         Signal_Handler : Spawn.Signals.Exit_Handler_Type;
          pragma Unreferenced (Signal_Handler);
          pragma Unreserve_All_Interrupts;
 

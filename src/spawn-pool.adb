@@ -101,6 +101,9 @@ package body Spawn.Pool is
    --  Atomically create Path with no group or other access. Set Created as
    --  soon as mkdir transfers ownership, including across a chmod exception.
 
+   procedure Require_C_String (Value : String; Name : String);
+   --  Reject a pool input which a downstream C API would silently truncate.
+
    function Poisons_Pool (Result : Protocol.Result_Type) return Boolean;
    --  Return whether Result leaves manager supervision unsafe for reuse.
 
@@ -797,6 +800,8 @@ package body Spawn.Pool is
             raise;
       end Start_Manager;
    begin
+      Require_C_String (Value => Manager_Path, Name => "manager path");
+      Require_C_String (Value => Socket_Dir, Name => "socket directory");
       if Manager_Path'Length = 0
         or else Manager_Path (Manager_Path'First) /= '/'
       then
@@ -947,6 +952,19 @@ package body Spawn.Pool is
             & Filename & "': "
             & Ada.Exceptions.Exception_Message (X => E));
    end Remove_Socket_File;
+
+   -------------------------------------------------------------------------
+
+   procedure Require_C_String (Value : String; Name : String)
+   is
+   begin
+      if Ada.Strings.Fixed.Index
+        (Source  => Value,
+         Pattern => (1 => ASCII.NUL)) /= 0
+      then
+         raise Pool_Error with Name & " contains NUL";
+      end if;
+   end Require_C_String;
 
    -------------------------------------------------------------------------
 

@@ -22,7 +22,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +51,8 @@ static int fail_proc_read_once;
 static int fail_close_range_once;
 static int fail_pidfd_open_once;
 static int fail_waitpid_once;
+static int fail_group_reap_once;
+static int stall_leader_reap;
 static int group_signal_after_reap;
 static int interrupt_waitpid_once;
 static int track_group_lifetime;
@@ -56,9 +60,15 @@ static const char *group_setup_wait_path;
 static pid_t tracked_group = -1;
 static int tracked_leader_reaped;
 static int signal_marker_fd = -1;
+static int lifecycle_marker_fd = -1;
+static atomic_int pause_parent_after_fork;
+static atomic_int parent_fork_paused;
+static atomic_int release_parent_fork;
+static atomic_int termination_call_started;
 
 DIR *__real_opendir(const char *path);
 struct dirent *__real_readdir(DIR *directory);
+pid_t __real_fork(void);
 int __real_kill(pid_t pid, int signal);
 int __real_setpgid(pid_t pid, pid_t group);
 long __real_syscall(long number, ...);
@@ -68,8 +78,13 @@ pid_t __real_waitpid(pid_t pid, int *status, int options);
 int __wrap_kill(pid_t pid, int signal)
 {
 	if (getpid() == wrapper_owner && track_group_lifetime
-	    && pid == -tracked_group && tracked_leader_reaped)
+	    && pid == -tracked_group && tracked_leader_reaped) {
+		char marker = 'r';
+
 		group_signal_after_reap = 1;
+		if (lifecycle_marker_fd >= 0)
+			(void)write(lifecycle_marker_fd, &marker, sizeof(marker));
+	}
 	if (getpid() == wrapper_owner && pid < 0 && signal == SIGTERM
 	    && fail_group_termination_once) {
 		fail_group_termination_once = 0;
@@ -77,6 +92,23 @@ int __wrap_kill(pid_t pid, int signal)
 		return -1;
 	}
 	return __real_kill(pid, signal);
+}
+
+/* Hold one parent immediately after fork so shutdown races publication. */
+pid_t __wrap_fork(void)
+{
+	pid_t pid = __real_fork();
+
+	if (pid > 0 && getpid() == wrapper_owner
+	    && atomic_exchange(&pause_parent_after_fork, 0)) {
+		atomic_store(&parent_fork_paused, 1);
+		while (!atomic_load(&release_parent_fork)) {
+			struct timespec pause = { 0, 1000 * 1000 };
+
+			(void)nanosleep(&pause, NULL);
+		}
+	}
+	return pid;
 }
 
 /* Hide /proc/self/fd once so close_range must carry descriptor cleanup. */
@@ -173,7 +205,15 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options)
 {
 	pid_t waited;
 
-	if (getpid() == wrapper_owner && pid > 0 && options == 0
+	if (getpid() == wrapper_owner && pid < 0 && options == WNOHANG
+	    && fail_group_reap_once) {
+		fail_group_reap_once = 0;
+		errno = EIO;
+		return -1;
+	}
+
+	if (getpid() == wrapper_owner && pid > 0
+	    && (options == 0 || options == WNOHANG)
 	    && interrupt_waitpid_once) {
 		interrupt_waitpid_once = 0;
 		errno = EINTR;
@@ -185,6 +225,9 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options)
 		errno = EIO;
 		return -1;
 	}
+	if (getpid() == wrapper_owner && pid > 0 && options == WNOHANG
+	    && stall_leader_reap)
+		return 0;
 	waited = __real_waitpid(pid, status, options);
 	if (getpid() == wrapper_owner && track_group_lifetime
 	    && pid == tracked_group && waited == pid)
@@ -1040,6 +1083,172 @@ static void test_reap_failure_fail_stop(void)
 	pass("leader reap failure fail-stops group owner");
 }
 
+/* Prove a killed but unreapable leader cannot block manager cancellation. */
+static void test_leader_reap_timeout_fail_stop(void)
+{
+	pid_t supervisor;
+	pid_t adopted;
+	int adopted_status;
+	int supervisor_status;
+
+	require(prctl(PR_SET_CHILD_SUBREAPER, 1) == 0,
+		"enable leader-timeout test subreaper");
+	supervisor = fork();
+	require(supervisor >= 0, "fork leader-timeout supervisor");
+	if (supervisor == 0) {
+		char *empty_environment[] = { NULL };
+		char *arguments[] = { "/bin/sleep", "60", NULL };
+		struct spawn_posix_result result;
+
+		wrapper_owner = getpid();
+		stall_leader_reap = 1;
+		(void)spawn_posix_execute(
+			"/bin/sleep", arguments, 0, empty_environment, "/",
+			0, NULL, 0, NULL, 10, &result);
+		_exit(96);
+	}
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for leader-timeout supervisor");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == CONTAINMENT_EXIT_STATUS,
+		"leader reap timeout did not fail-stop group owner");
+	do {
+		adopted = __real_waitpid(-1, &adopted_status, 0);
+	} while (adopted > 0 || (adopted < 0 && errno == EINTR));
+	require(adopted < 0 && errno == ECHILD,
+		"leader reap timeout left an adopted child");
+	pass("leader reap timeout fail-stops without blocking cancellation");
+}
+
+/* Prove descendant-reap failure never retries a recycled process-group id. */
+static void test_group_reap_failure_fail_stop(
+	const char *self,
+	const char *pid_path)
+{
+	int marker_pipe[2];
+	pid_t supervisor;
+	pid_t adopted;
+	int adopted_status;
+	int supervisor_status;
+	char marker;
+	ssize_t marker_count;
+
+	require(pipe(marker_pipe) == 0, "create group-reap marker pipe");
+	supervisor = fork();
+	require(supervisor >= 0, "fork group-reap supervisor");
+	if (supervisor == 0) {
+		char *empty_environment[] = { NULL };
+		char *arguments[] = { (char *)self, "fixture", "tree", NULL };
+		struct spawn_posix_result result;
+
+		(void)close(marker_pipe[0]);
+		wrapper_owner = getpid();
+		track_group_lifetime = 1;
+		tracked_group = -1;
+		tracked_leader_reaped = 0;
+		group_signal_after_reap = 0;
+		fail_group_reap_once = 1;
+		lifecycle_marker_fd = marker_pipe[1];
+		(void)spawn_posix_execute(
+			self, arguments, 0, empty_environment, "/",
+			SPAWN_POSIX_TRUNCATE_FILE, pid_path, 0, NULL, 50,
+			&result);
+		_exit(group_signal_after_reap ? 97 : 96);
+	}
+	require(close(marker_pipe[1]) == 0, "close group-reap marker writer");
+	require(__real_waitpid(supervisor, &supervisor_status, 0) == supervisor,
+		"wait for group-reap supervisor");
+	marker_count = read(marker_pipe[0], &marker, sizeof(marker));
+	require(close(marker_pipe[0]) == 0, "close group-reap marker reader");
+	require(marker_count == 0,
+		"group cleanup signaled a recycled identity after leader reap");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == CONTAINMENT_EXIT_STATUS,
+		"descendant reap failure did not fail-stop group owner");
+	do {
+		adopted = __real_waitpid(-1, &adopted_status, 0);
+	} while (adopted > 0 || (adopted < 0 && errno == EINTR));
+	require(adopted < 0 && errno == ECHILD,
+		"descendant reap failure left an adopted child");
+	pass("descendant reap failure retires group identity before fail-stop");
+}
+
+struct threaded_execution {
+	const char *self;
+	int return_code;
+	struct spawn_posix_result result;
+};
+
+/* Execute one request in the same role as the manager's Ada main task. */
+static void *run_threaded_execution(void *argument)
+{
+	struct threaded_execution *execution = argument;
+	char *empty_environment[] = { NULL };
+	char *arguments[] = {
+		(char *)execution->self, "fixture", "tree", NULL
+	};
+
+	execution->return_code = spawn_posix_execute(
+		execution->self, arguments, 0, empty_environment, "/", 0, NULL,
+		0, NULL, 1000, &execution->result);
+	return NULL;
+}
+
+/* Model the GNAT interrupt-server task which invokes the C shutdown hook. */
+static void *run_threaded_termination(void *argument)
+{
+	(void)argument;
+	atomic_store(&termination_call_started, 1);
+	spawn_posix_terminate_current();
+	return NULL;
+}
+
+/* Prove shutdown cannot pass the fork-to-group-publication window. */
+static void test_threaded_group_publication(const char *self)
+{
+	struct threaded_execution execution = { self, 0, { 0, 0, 0, 0, 0 } };
+	pthread_t execution_thread;
+	pthread_t termination_thread;
+	struct timespec pause = { 0, 10 * 1000 * 1000 };
+
+	wrapper_owner = getpid();
+	atomic_store(&pause_parent_after_fork, 1);
+	atomic_store(&parent_fork_paused, 0);
+	atomic_store(&release_parent_fork, 0);
+	atomic_store(&termination_call_started, 0);
+	require(pthread_create(
+		&execution_thread, NULL, run_threaded_execution, &execution) == 0,
+		"create threaded execution");
+	for (int attempt = 0;
+	     attempt < 500 && !atomic_load(&parent_fork_paused);
+	     ++attempt)
+		(void)nanosleep(&pause, NULL);
+	require(atomic_load(&parent_fork_paused),
+		"threaded execution did not reach the fork barrier");
+	require(pthread_create(
+		&termination_thread, NULL, run_threaded_termination, NULL) == 0,
+		"create threaded termination");
+	for (int attempt = 0;
+	     attempt < 500 && !atomic_load(&termination_call_started);
+	     ++attempt)
+		(void)nanosleep(&pause, NULL);
+	require(atomic_load(&termination_call_started),
+		"threaded termination did not start");
+	for (int attempt = 0; attempt < 5; ++attempt)
+		(void)nanosleep(&pause, NULL);
+	atomic_store(&release_parent_fork, 1);
+	require(pthread_join(termination_thread, NULL) == 0,
+		"join threaded termination");
+	require(pthread_join(execution_thread, NULL) == 0,
+		"join threaded execution");
+	wrapper_owner = -1;
+	require(execution.return_code == 0
+		&& execution.result.kind == SPAWN_POSIX_SIGNALED
+		&& execution.result.signal_number == SIGKILL,
+		"threaded shutdown missed the unpublished request group");
+	pass("threaded shutdown waits for request-group publication");
+}
+
 static void test_timeout_group(
 	const char *self,
 	const char *pid_path)
@@ -1158,6 +1367,9 @@ int main(int argc, char *argv[], char *envp[])
 	test_termination_failure_fail_stop(self, pid_path);
 	require(unlink(pid_path) == 0, "reset fail-stop pid file");
 	test_reap_failure_fail_stop();
+	test_leader_reap_timeout_fail_stop();
+	test_group_reap_failure_fail_stop(self, pid_path);
+	require(unlink(pid_path) == 0, "reset group-reap pid file");
 	test_interrupted_group_setup_reap();
 	test_group_setup_failure_descendants(self, pid_path);
 	require(unlink(pid_path) == 0, "reset group setup descendant pid file");
@@ -1168,6 +1380,7 @@ int main(int argc, char *argv[], char *envp[])
 	require(unlink(pid_path) == 0, "reset descendant pid file");
 	test_success_group_cleanup(self, pid_path);
 	test_child_signal_dispositions(fifo_path);
+	test_threaded_group_publication(self);
 
 	require(close(inherited_fd) == 0 && close(source_fd) == 0,
 		"close descriptor fixture");

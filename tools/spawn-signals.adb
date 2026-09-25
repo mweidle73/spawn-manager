@@ -31,11 +31,7 @@ with Ada.Command_Line;
 
 with GNAT.OS_Lib;
 
-with Spawn.Logger;
-
 package body Spawn.Signals is
-
-   package Logger renames Spawn.Logger;
 
    procedure Terminate_Current
      with Import,
@@ -53,14 +49,6 @@ package body Spawn.Signals is
       is
       begin
          Terminate_Current;
-         begin
-            pragma Debug
-              (Logger.Log_File ("Signal received - shutting down"));
-            Socket_L.Close;
-            Socket_C.Close;
-         exception
-            when others => null;
-         end;
          GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));
       end Handle_Signal;
 

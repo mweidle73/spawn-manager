@@ -97,9 +97,10 @@ int spawn_posix_execute(
 /*
  * Kill the active request group, if any.
  *
- * This function is async-signal-safe and may be called by the manager's
- * SIGINT/SIGTERM handler. The normal execute path remains responsible for
- * reaping when the manager itself continues.
+ * This function is called by GNAT's SIGINT/SIGTERM interrupt-server task. It
+ * synchronizes through a process-local mutex with fork publication and exact
+ * leader reaping; it is not a raw POSIX signal handler. The normal execute path
+ * remains the sole reaper.
  */
 void spawn_posix_terminate_current(void);
 
