@@ -322,8 +322,9 @@ package body Spawn.Pool is
         (Snapshot       => Snapshot,
          Pool_Directory => Pool_Directory);
 
-      --  Cancellation must happen before waiting for active leases: manager
-      --  signal handlers close their communication sockets and wake callers.
+      --  Cancellation must happen before waiting for active leases: the
+      --  manager contains its active request and exits, so transport closure
+      --  wakes callers which must return or abandon their leases.
 
       Position := Snapshot.First;
       while Socket_Maps.Has_Element (Position => Position) loop

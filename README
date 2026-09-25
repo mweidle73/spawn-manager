@@ -119,7 +119,12 @@ before the final reap.
 Every request sets Linux `no_new_privs` before arming its parent-death signal.
 Set-user-ID, set-group-ID and file-capability metadata therefore cannot grant
 the child new privileges or clear that signal during `execve`. The restriction
-is inherited by shell children and structured-exec descendants.
+is inherited by shell children and structured-exec descendants. This is a
+deliberate version-1 compatibility boundary for both request types: commands
+which rely on gaining privileges during `execve` are not supported. Version 1
+has no opt-out. A future exception requires a concrete transformation consumer,
+an explicit request contract and cgroup containment because a privileged exec
+can clear the direct leader's parent-death signal.
 
 The parent-death signal covers the direct request leader only; Linux clears
 that setting in children created by the target. Normal request completion and
@@ -143,7 +148,9 @@ manager-wide placement behavior explicitly.
 Version 1 reports internal and child-spawn failures through one result kind.
 Stages which can represent manager-side supervision therefore poison the
 complete pool, including the ambiguous error-pipe and process-group stages.
-Stages which can only be child-side pre-exec failures remain reusable.
+This also includes manager-side signal-mask restoration failures reported as
+`Reset_Signals`. Stages which can only be child-side pre-exec failures remain
+reusable.
 
 A descendant which deliberately changes process group or session with
 `setpgid()` or `setsid()` can leave the request process group; containing that
