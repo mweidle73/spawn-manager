@@ -124,9 +124,10 @@ package body Spawn_Manager_Tests is
          Assert (Condition => Result.Kind = Spawn.Protocol.Request_Rejected,
                  Message   => "minimum-bound request rejection missing");
          Assert
-           (Condition => Length (Result.Diagnostic)
-              <= Minimum_Shell_Bound - 17,
-            Message   => "request rejection diagnostic exceeds frame");
+           (Condition => Length (Result.Diagnostic) > 0
+              and then Length (Result.Diagnostic)
+                 <= Minimum_Shell_Bound - 17,
+            Message   => "request rejection diagnostic missing or too long");
       end;
       Request_Socket.Close;
 
@@ -146,9 +147,10 @@ package body Spawn_Manager_Tests is
          Assert (Condition => Result.Kind = Spawn.Protocol.Protocol_Failed,
                  Message   => "minimum-bound protocol failure missing");
          Assert
-           (Condition => Length (Result.Diagnostic)
-              <= Minimum_Shell_Bound - 17,
-            Message   => "protocol failure diagnostic exceeds frame");
+           (Condition => Length (Result.Diagnostic) > 0
+              and then Length (Result.Diagnostic)
+                 <= Minimum_Shell_Bound - 17,
+            Message   => "protocol failure diagnostic missing or too long");
       end;
       Protocol_Socket.Close;
 
@@ -188,9 +190,10 @@ package body Spawn_Manager_Tests is
               and then Result.Failure.Error_Number = 2,
             Message   => "minimum-bound spawn failure differs");
          Assert
-           (Condition => Length (Result.Failure.Diagnostic)
-              <= Minimum_Exec_Bound - 23,
-            Message   => "spawn failure diagnostic exceeds frame");
+           (Condition => Length (Result.Failure.Diagnostic) > 0
+              and then Length (Result.Failure.Diagnostic)
+                 <= Minimum_Exec_Bound - 23,
+            Message   => "spawn failure diagnostic missing or too long");
       end;
       Spawn_Socket.Close;
    exception

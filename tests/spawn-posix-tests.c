@@ -65,6 +65,8 @@ static atomic_int pause_parent_after_fork;
 static atomic_int parent_fork_paused;
 static atomic_int release_parent_fork;
 static atomic_int termination_call_started;
+static char setuid_fixture_directory[PATH_MAX];
+static char setuid_fixture_path[PATH_MAX];
 
 DIR *__real_opendir(const char *path);
 struct dirent *__real_readdir(DIR *directory);
@@ -282,6 +284,19 @@ static char *read_file(const char *path)
 	require(fclose(file) == 0, "close output");
 	content[count] = '\0';
 	return content;
+}
+
+/* Remove the privileged fixture even when a test assertion exits early. */
+static void cleanup_setuid_fixture(void)
+{
+	if (setuid_fixture_path[0] != '\0') {
+		(void)unlink(setuid_fixture_path);
+		setuid_fixture_path[0] = '\0';
+	}
+	if (setuid_fixture_directory[0] != '\0') {
+		(void)rmdir(setuid_fixture_directory);
+		setuid_fixture_directory[0] = '\0';
+	}
 }
 
 /* Create one root-owned set-user-ID copy for the containment exec oracle. */
@@ -505,6 +520,35 @@ static int fixture(int argc, char *argv[], char *envp[])
 	return 90;
 }
 
+/* Run one SIGCHLD inheritance case in a fresh process image. */
+static int fixture_inherited_sigchld(
+	const char *self,
+	const char *sigchld_case)
+{
+	char *empty_environment[] = { NULL };
+	char *arguments[] = { (char *)self, "fixture", "exit37", NULL };
+	struct spawn_posix_result result;
+	struct sigaction action = { 0 };
+
+	if (strcmp(sigchld_case, "ignore") == 0)
+		action.sa_handler = SIG_IGN;
+	else if (strcmp(sigchld_case, "no-cld-wait") == 0) {
+		action.sa_handler = SIG_DFL;
+		action.sa_flags = SA_NOCLDWAIT;
+	} else
+		return 91;
+	if (sigemptyset(&action.sa_mask) < 0
+	    || sigaction(SIGCHLD, &action, NULL) < 0)
+		return 92;
+	if (spawn_posix_execute(
+		self, arguments, 0, empty_environment, "/", 0, NULL,
+		0, NULL, 1000, &result) != 0
+	    || result.kind != SPAWN_POSIX_EXITED
+	    || result.exit_status != 37)
+		return 93;
+	return 0;
+}
+
 static void test_exit_and_signal(const char *self)
 {
 	char *empty_environment[] = { NULL };
@@ -532,31 +576,16 @@ static void test_exit_and_signal(const char *self)
 static void test_inherited_sigchld_disposition(const char *self)
 {
 	for (int sigchld_case = 0; sigchld_case < 2; ++sigchld_case) {
+		const char *case_name = sigchld_case == 0
+			? "ignore" : "no-cld-wait";
 		pid_t supervisor;
 		int supervisor_status;
 
 		supervisor = fork();
 		require(supervisor >= 0, "fork SIGCHLD supervisor");
 		if (supervisor == 0) {
-			char *empty_environment[] = { NULL };
-			char *arguments[] = {
-				(char *)self, "fixture", "exit37", NULL
-			};
-			struct spawn_posix_result result;
-			struct sigaction action = { 0 };
-
-			action.sa_handler = sigchld_case == 0 ? SIG_IGN : SIG_DFL;
-			action.sa_flags = sigchld_case == 0 ? 0 : SA_NOCLDWAIT;
-			if (sigemptyset(&action.sa_mask) < 0
-			    || sigaction(SIGCHLD, &action, NULL) < 0)
-				_exit(91);
-			if (spawn_posix_execute(
-				self, arguments, 0, empty_environment, "/", 0, NULL,
-				0, NULL, 1000, &result) != 0
-			    || result.kind != SPAWN_POSIX_EXITED
-			    || result.exit_status != 37)
-				_exit(92);
-			_exit(0);
+			(void)execl(self, self, "sigchld-core", case_name, NULL);
+			_exit(94);
 		}
 		require(__real_waitpid(
 			supervisor, &supervisor_status, 0) == supervisor,
@@ -584,27 +613,38 @@ static void test_child_containment_state(const char *self)
 		1000, &result) == 0, "execute child containment fixture");
 	require_exited(&result, 0, "child containment state");
 	if (geteuid() == 0) {
-		char target[PATH_MAX];
+		char directory_template[] = "/tmp/spawn-posix-setuid-XXXXXX";
 		pid_t supervisor;
 		int supervisor_status;
 
-		require(snprintf(target, sizeof(target),
-			"/tmp/spawn-posix-setuid-%ld", (long)getpid())
-			< (int)sizeof(target), "construct setuid fixture path");
-		(void)unlink(target);
-		create_setuid_copy(self, target);
+		require(atexit(cleanup_setuid_fixture) == 0,
+			"register setuid fixture cleanup");
+		require(mkdtemp(directory_template) != NULL,
+			"create private setuid fixture directory");
+		require(snprintf(setuid_fixture_directory,
+			sizeof(setuid_fixture_directory), "%s", directory_template)
+			< (int)sizeof(setuid_fixture_directory),
+			"record setuid fixture directory");
+		require(chown(setuid_fixture_directory, 65534, 65534) == 0,
+			"delegate private setuid fixture directory");
+		require(snprintf(setuid_fixture_path, sizeof(setuid_fixture_path),
+			"%s/target", setuid_fixture_directory)
+			< (int)sizeof(setuid_fixture_path),
+			"construct setuid fixture path");
+		create_setuid_copy(self, setuid_fixture_path);
 		supervisor = fork();
 		require(supervisor >= 0, "fork setuid containment supervisor");
 		if (supervisor == 0) {
 			char *setuid_arguments[] = {
-				target, "fixture", "containment", "65534", NULL
+				setuid_fixture_path, "fixture", "containment", "65534", NULL
 			};
 			struct spawn_posix_result setuid_result;
 
 			if (setgid(65534) < 0 || setuid(65534) < 0)
 				_exit(101);
 			_exit(spawn_posix_execute(
-				target, setuid_arguments, 0, empty_environment, "/",
+				setuid_fixture_path, setuid_arguments, 0,
+				empty_environment, "/",
 				0, NULL, 0, NULL, 1000, &setuid_result) == 0
 				&& setuid_result.kind == SPAWN_POSIX_EXITED
 				&& setuid_result.exit_status == 0 ? 0 : 102);
@@ -612,10 +652,10 @@ static void test_child_containment_state(const char *self)
 		require(__real_waitpid(
 			supervisor, &supervisor_status, 0) == supervisor,
 			"wait for setuid containment supervisor");
-		require(unlink(target) == 0, "remove setuid fixture target");
 		require(WIFEXITED(supervisor_status)
 			&& WEXITSTATUS(supervisor_status) == 0,
 			"setuid exec lost parent-death containment");
+		cleanup_setuid_fixture();
 	}
 	pass("child preserves parent-death containment");
 }
@@ -873,6 +913,7 @@ static void test_no_proc_descriptor_cleanup(void)
 	require(spawn_posix_execute(
 		"/bin/true", arguments, 0, empty_environment, "/", 0, NULL,
 		0, NULL, -1, &result) == 0, "execute without proc descriptor scan");
+	require(!fail_proc_scan_once, "procfs open failure injection did not fire");
 	wrapper_owner = -1;
 	require_exited(&result, 0, "close_range without proc descriptor scan");
 	pass("descriptor cleanup without procfs");
@@ -1243,8 +1284,8 @@ static void *run_threaded_termination(void *argument)
 	return NULL;
 }
 
-/* Prove shutdown cannot pass the fork-to-group-publication window. */
-static void test_threaded_group_publication(const char *self)
+/* Exercise the publication race inside one disposable manager process. */
+static void run_threaded_group_publication(const char *self)
 {
 	struct threaded_execution execution = { self, 0, { 0, 0, 0, 0, 0 } };
 	pthread_t execution_thread;
@@ -1286,6 +1327,26 @@ static void test_threaded_group_publication(const char *self)
 		&& execution.result.kind == SPAWN_POSIX_SIGNALED
 		&& execution.result.signal_number == SIGKILL,
 		"threaded shutdown missed the unpublished request group");
+}
+
+/* Prove shutdown cannot pass the fork-to-group-publication window. */
+static void test_threaded_group_publication(const char *self)
+{
+	pid_t supervisor;
+	int supervisor_status;
+
+	supervisor = fork();
+	require(supervisor >= 0, "fork threaded publication supervisor");
+	if (supervisor == 0) {
+		run_threaded_group_publication(self);
+		_exit(0);
+	}
+	require(__real_waitpid(
+		supervisor, &supervisor_status, 0) == supervisor,
+		"wait for threaded publication supervisor");
+	require(WIFEXITED(supervisor_status)
+		&& WEXITSTATUS(supervisor_status) == 0,
+		"threaded publication supervisor failed");
 	pass("threaded shutdown waits for request-group publication");
 }
 
@@ -1362,6 +1423,8 @@ int main(int argc, char *argv[], char *envp[])
 
 	if (argc == 2 && strcmp(argv[1], "--benchmark") == 0)
 		return benchmark();
+	if (argc == 3 && strcmp(argv[1], "sigchld-core") == 0)
+		return fixture_inherited_sigchld(argv[0], argv[2]);
 	if (argc > 1 && strcmp(argv[1], "fixture") == 0)
 		return fixture(argc, argv, envp);
 	original_umask = umask(0022);
