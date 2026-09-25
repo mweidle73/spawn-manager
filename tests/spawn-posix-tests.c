@@ -528,6 +528,46 @@ static void test_exit_and_signal(const char *self)
 	pass("exact exit and signal results");
 }
 
+/* Prove inherited auto-reap policy cannot invalidate exact child ownership. */
+static void test_inherited_sigchld_disposition(const char *self)
+{
+	for (int sigchld_case = 0; sigchld_case < 2; ++sigchld_case) {
+		pid_t supervisor;
+		int supervisor_status;
+
+		supervisor = fork();
+		require(supervisor >= 0, "fork SIGCHLD supervisor");
+		if (supervisor == 0) {
+			char *empty_environment[] = { NULL };
+			char *arguments[] = {
+				(char *)self, "fixture", "exit37", NULL
+			};
+			struct spawn_posix_result result;
+			struct sigaction action = { 0 };
+
+			action.sa_handler = sigchld_case == 0 ? SIG_IGN : SIG_DFL;
+			action.sa_flags = sigchld_case == 0 ? 0 : SA_NOCLDWAIT;
+			if (sigemptyset(&action.sa_mask) < 0
+			    || sigaction(SIGCHLD, &action, NULL) < 0)
+				_exit(91);
+			if (spawn_posix_execute(
+				self, arguments, 0, empty_environment, "/", 0, NULL,
+				0, NULL, 1000, &result) != 0
+			    || result.kind != SPAWN_POSIX_EXITED
+			    || result.exit_status != 37)
+				_exit(92);
+			_exit(0);
+		}
+		require(__real_waitpid(
+			supervisor, &supervisor_status, 0) == supervisor,
+			"wait for SIGCHLD supervisor");
+		require(WIFEXITED(supervisor_status)
+			&& WEXITSTATUS(supervisor_status) == 0,
+			"inherited SIGCHLD policy broke exact child ownership");
+	}
+	pass("manager normalizes inherited SIGCHLD disposition");
+}
+
 static void test_child_containment_state(const char *self)
 {
 	char *empty_environment[] = { NULL };
@@ -1345,6 +1385,7 @@ int main(int argc, char *argv[], char *envp[])
 	(void)unlink(symlink_path);
 	(void)unlink(fifo_path);
 	(void)unlink(pid_path);
+	test_inherited_sigchld_disposition(self);
 	test_empty_descriptor_fallback();
 	test_proc_scan_error_fallback(self);
 

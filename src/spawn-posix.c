@@ -85,6 +85,9 @@ static int descriptor_ceiling = DESCRIPTOR_CEILING_UNINITIALIZED;
  */
 static int subreaper_enabled;
 
+/* The manager owns child waits and therefore normalizes SIGCHLD once. */
+static int sigchld_normalized;
+
 struct child_error {
 	int stage;
 	int error_number;
@@ -253,6 +256,17 @@ static int open_output_file(int mode, const char *path)
 	return -1;
 }
 
+/* Install an empty-mask default disposition for one process-wide signal. */
+static int set_default_signal_disposition(int signal_number)
+{
+	struct sigaction action = { 0 };
+
+	action.sa_handler = SIG_DFL;
+	if (sigemptyset(&action.sa_mask) < 0)
+		return -1;
+	return sigaction(signal_number, &action, NULL);
+}
+
 /* Give the forked child a blocked mask until it installs safe dispositions. */
 static int block_child_signals(sigset_t *original_mask)
 {
@@ -270,12 +284,8 @@ static int block_child_signals(sigset_t *original_mask)
  */
 static void reset_signal_handlers(void)
 {
-	struct sigaction action = { 0 };
-
-	action.sa_handler = SIG_DFL;
-	if (sigemptyset(&action.sa_mask) < 0
-	    || sigaction(SIGINT, &action, NULL) < 0
-	    || sigaction(SIGTERM, &action, NULL) < 0)
+	if (set_default_signal_disposition(SIGINT) < 0
+	    || set_default_signal_disposition(SIGTERM) < 0)
 		report_child_error(SPAWN_POSIX_RESET_SIGNALS);
 }
 
@@ -720,6 +730,15 @@ int spawn_posix_execute(
 	 */
 	set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
 		SPAWN_POSIX_NO_FAILURE, 0);
+	if (!sigchld_normalized) {
+		/* Exact wait ownership requires children to remain waitable. */
+		if (set_default_signal_disposition(SIGCHLD) < 0) {
+			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,
+				SPAWN_POSIX_RESET_SIGNALS, errno);
+			return -1;
+		}
+		sigchld_normalized = 1;
+	}
 	if (!subreaper_enabled) {
 		if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) {
 			set_result(result, SPAWN_POSIX_INTERNAL_ERROR, -1, 0,

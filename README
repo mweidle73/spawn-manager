@@ -123,11 +123,13 @@ is inherited by shell children and structured-exec descendants.
 
 The parent-death signal covers the direct request leader only; Linux clears
 that setting in children created by the target. Normal request completion and
-catchable manager termination still clean the complete process group. If the
-manager itself is lost through an uncatchable event such as `SIGKILL` or OOM,
-already forked descendants require the separately selected cgroup containment
-contract. Version 1 does not claim process-group-only cleanup after the process
-which owns that cleanup has ceased to exist.
+catchable manager termination signal and reap the observed process group. A
+process group cannot, however, make target-side `fork` and group signaling one
+atomic operation. A target which creates a new descendant concurrently with
+the final group signal therefore requires the separately selected cgroup
+containment contract, as do descendants left by uncatchable manager loss such
+as `SIGKILL` or OOM. Version 1 does not claim those cases from the process-group
+fallback alone.
 
 `Pid_Setup` continues to receive the long-lived manager PID. An optional
 `Pid_Reset` runs after a valid result while the same pool lease is still
@@ -154,11 +156,13 @@ bounded by that timeout plus the transport allowance. An intentionally
 unlimited child also has an unlimited first-result-byte wait because version 1
 does not add a heartbeat protocol.
 
-A small C module is the only post-`fork` boundary. It gives the forked child a
-blocked termination-signal mask; the child restores default `SIGINT` and
-`SIGTERM` dispositions before clearing that mask. A process-local ownership
-mutex synchronizes the manager main task with GNAT's separate interrupt-server
-tasks
+A small C module is the only post-`fork` boundary. Before forking, the manager
+normalizes `SIGCHLD` so every request leader remains waitable even when the
+manager was started by a parent using `SIG_IGN` or `SA_NOCLDWAIT`. It gives the
+forked child a blocked termination-signal mask; the child restores default
+`SIGINT` and `SIGTERM` dispositions before clearing that mask. A process-local
+ownership mutex synchronizes the manager main task with GNAT's separate
+interrupt-server tasks
 across fork publication and exact leader reaping. The child then performs
 child-only working-directory and descriptor setup, calls `execve`, reports
 pre-exec `errno`, waits for the exact status and owns timeout cleanup. The
