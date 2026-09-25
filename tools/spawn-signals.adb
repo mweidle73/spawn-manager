@@ -31,11 +31,13 @@ with Ada.Command_Line;
 
 with GNAT.OS_Lib;
 
-with Spawn.Logger;
-
 package body Spawn.Signals is
 
-   package L renames Spawn.Logger;
+   procedure Terminate_Current
+     with Import,
+          Convention    => C,
+          External_Name => "spawn_posix_terminate_current";
+   --  Kill the C-owned active request group, or do nothing when none exists.
 
    -------------------------------------------------------------------------
 
@@ -46,34 +48,9 @@ package body Spawn.Signals is
       procedure Handle_Signal
       is
       begin
-         pragma Debug (L.Log_File ("Signal received - shutting down"));
-         Socket_L.Close;
-         Socket_C.Close;
-         if Running then
-            pragma Debug (L.Log_File ("Child with pid"
-              & GNAT.Expect.Get_Pid (Descriptor => Current_Pd)'Img
-              & " still running, closing process descriptor"));
-            GNAT.Expect.Close (Descriptor => Current_Pd);
-         end if;
+         Terminate_Current;
          GNAT.OS_Lib.OS_Exit (Status => Integer (Ada.Command_Line.Success));
       end Handle_Signal;
-
-      ----------------------------------------------------------------------
-
-      procedure Set_Running (Descriptor : GNAT.Expect.Process_Descriptor)
-      is
-      begin
-         Running    := True;
-         Current_Pd := Descriptor;
-      end Set_Running;
-
-      ----------------------------------------------------------------------
-
-      procedure Stopped
-      is
-      begin
-         Running := False;
-      end Stopped;
 
    end Exit_Handler_Type;
 

@@ -3,14 +3,19 @@ with "spawn_common";
 
 project Spawn_Tests is
 
+   for Languages use ("Ada", "C");
+
    type Build_Type is ("tests", "coverage");
    Build : Build_Type := external ("BUILD", "tests");
 
    for Main use ("test_runner.adb");
    for Source_Dirs use Spawn_Common.Source_Dirs & "tests";
+   for Excluded_Source_Files use
+     ("protocol-failure-manager.c", "spawn-posix-tests.c");
 
    Compiler_Switches := Spawn_Common.Compiler_Switches & "-gnata" & "-gnatwal";
-   Linker_Switches   := ();
+   Linker_Switches   :=
+     ("-Wl,--wrap=chmod", "-Wl,--wrap=mkdir", "-Wl,--wrap=recv");
 
    case Build is
       when "tests" =>
@@ -26,6 +31,7 @@ project Spawn_Tests is
 
    package Compiler is
       for Default_Switches ("ada") use Compiler_Switches;
+      for Default_Switches ("c") use Spawn_Common.C_Compiler_Switches;
    end Compiler;
 
    package Linker is

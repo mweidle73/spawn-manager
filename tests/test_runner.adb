@@ -30,12 +30,12 @@
 with Ahven.Text_Runner;
 with Ahven.Framework;
 
-with Spawn.Utils;
-
 with Spawn_Utils_Tests;
 with Spawn_Manager_Tests;
 
 with Spawn.Pool.Tests;
+with Spawn.Protocol.Tests;
+with Spawn.Transport.Tests;
 
 procedure Test_Runner is
    use Ahven.Framework;
@@ -43,14 +43,16 @@ procedure Test_Runner is
    S : constant Test_Suite_Access
      := Create_Suite (Suite_Name => "IPC/Spawn tests");
 begin
-   Spawn.Utils.Expand_Search_Path (Cmd_Path => "obj/spawn_manager");
-
    Add_Test (Suite => S.all,
              T     => new Spawn_Utils_Tests.Testcase);
    Add_Test (Suite => S.all,
              T     => new Spawn_Manager_Tests.Testcase);
    Add_Test (Suite => S.all,
              T     => new Spawn.Pool.Tests.Testcase);
+   Add_Test (Suite => S.all,
+             T     => new Spawn.Protocol.Tests.Testcase);
+   Add_Test (Suite => S.all,
+             T     => new Spawn.Transport.Tests.Testcase);
 
    Ahven.Text_Runner.Run (Suite => S);
    Release_Suite (T => S);

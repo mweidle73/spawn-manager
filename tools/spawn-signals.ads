@@ -27,15 +27,19 @@
 --  executable file might be covered by the GNU Public License.
 --
 
-with Ada.Strings.Unbounded;
+with Ada.Interrupts.Names;
 
-package Spawn.Types is
+package Spawn.Signals is
 
-   type Data_Type is record
-      Success : Boolean := False;
-      Timeout : Integer := -1;
-      Command : Ada.Strings.Unbounded.Unbounded_String;
-      Dir     : Ada.Strings.Unbounded.Unbounded_String;
-   end record;
+   protected type Exit_Handler_Type is
+   private
+      procedure Handle_Signal;
+      --  Contain the active group before immediate process exit.
 
-end Spawn.Types;
+      pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGINT);
+      pragma Attach_Handler (Handle_Signal, Ada.Interrupts.Names.SIGTERM);
+   end Exit_Handler_Type;
+   --  GNAT dispatches attached signals from interrupt-server tasks. The C
+   --  hook therefore synchronizes with the manager's executing main task.
+
+end Spawn.Signals;

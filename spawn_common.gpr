@@ -14,6 +14,12 @@ project Spawn_Common is
                          "-gnato",
                          "-g") & Adaflags;
 
+   C_Compiler_Switches := ("-std=c11",
+                           "-W",
+                           "-Wall",
+                           "-Werror",
+                           "-O3");
+
    Binder_Switches   := ("-E");
 
 end Spawn_Common;

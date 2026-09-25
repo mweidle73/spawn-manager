@@ -36,46 +36,86 @@ with Anet.Sockets.Unix;
 
 with GNAT.Expect;
 
+with Spawn.Protocol;
+
 package Spawn.Pool is
+
+   --  The process owns one global manager pool. Each Execute call acquires
+   --  one exclusive manager lease, exchanges one frame and either returns the
+   --  manager after reset or poisons the pool. Cleanup first stops new leases,
+   --  then interrupts managers so active callers can leave before descriptors
+   --  and private socket paths are released.
 
    use Ada.Strings.Unbounded;
 
    type Log_Procedure is access procedure (Msg : String);
 
    procedure No_Log (Msg : String) is null;
+   --  Discard one optional pool diagnostic.
 
    procedure Init
-     (Manager_Count  : Positive      := 1;
+     (Manager_Path   : String;
+      Manager_Count  : Positive      := 1;
       Socket_Dir     : String        := "/tmp";
       Socket_Timeout : Duration      := 3.0;
       Buffer_Size    : Positive      := 8192;
       Log            : Log_Procedure := No_Log'Access);
-   --  Init pool with given number of spawn managers. The Socket_Dir argument
-   --  specifies the directory used to store spawn_manager communication
-   --  sockets and the optional log procedure will be used to log additional
-   --  runtime information. The optional socket timeout argument defines the
-   --  duration to wait for the appearance of each (1 .. Manager_Count)
-   --  communication sockets. If a timeout occurs, an exception is raised.
-   --  The Buffer_Size argument specifies the size of the command buffer used
-   --  in the spawned managers to receive commands. Relative socket addresses
-   --  are resolved during Init so Cleanup remains independent of later
-   --  changes to the caller's current directory.
+   --  Start Manager_Count processes from the explicit absolute Manager_Path.
+   --  Socket_Dir owns one randomized mode-0700 directory containing every
+   --  manager socket. Socket_Timeout bounds each manager's startup.
+   --  Buffer_Size is the active request and response frame bound and may not
+   --  exceed the fixed protocol maximum. A relative Socket_Dir remains
+   --  relative on the wire to protect the AF_UNIX length budget; Init
+   --  separately captures its absolute spelling so later directory changes
+   --  cannot break cleanup.
+   --  Init and Cleanup are lifecycle operations and must be caller-serialized;
+   --  Execute is task-safe after Init has completed.
 
    procedure No_Pid_Setup (Pid : GNAT.Expect.Process_Descriptor) is null;
+   --  Leave the selected long-lived manager in its current process context.
 
    procedure Execute
      (Command   : String;
       Directory : String  := Ada.Directories.Current_Directory;
       Timeout   : Integer := -1;
       Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
         (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
-   --  Execute command in given directory. The Timeout parameter specifies the
-   --  time in milliseconds after the command times out (the default is no
-   --  timeout (-1)). If a timeout occurs, a Command_Failed exception is raised
-   --  to indicate failure.
+   --  Execute Command as `/bin/bash -o pipefail -c` in Directory. Timeout is
+   --  measured in milliseconds and -1 means unlimited. Pid_Setup receives the
+   --  long-lived manager before it forks the shell. Pid_Reset runs after a
+   --  valid result and before that manager becomes reusable. Raise
+   --  Command_Failed for invalid requests and every result other than exit
+   --  status zero.
+
+   function Execute
+     (Request   : Spawn.Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access)
+      return Spawn.Protocol.Result_Type;
+   --  Execute one structured request and return its exact termination result.
+   --  Pid_Setup receives the selected long-lived manager before it forks the
+   --  request child. Pid_Reset runs while the same manager lease is still
+   --  exclusive; concurrent calls acquire independent manager leases. A
+   --  protocol or internal-supervision failure poisons the complete pool
+   --  because the reporting manager cannot be assumed safe for reuse. Any
+   --  lease abandoned by setup, reset, transport failure or task abort has
+   --  the same fail-closed pool-wide effect.
+
+   procedure Execute_Checked
+     (Request   : Spawn.Protocol.Exec_Request_Type;
+      Pid_Setup : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access;
+      Pid_Reset : access procedure
+        (Pid : GNAT.Expect.Process_Descriptor) := No_Pid_Setup'Access);
+   --  Execute one structured request and raise unless it exits with status 0.
 
    procedure Cleanup;
-   --  Cleanup spawn pool.
+   --  Stop new leases, cancel every manager, wait for active callers to leave
+   --  the pool and remove all socket state. Cleanup cancels the complete pool.
 
    Pool_Error         : exception;
    Command_Failed     : exception;
@@ -86,22 +126,15 @@ private
    type Socket_Handle is access Anet.Sockets.Unix.TCP_Socket_Type;
 
    type Socket_Container is record
-      Address         : Unbounded_String;
-      Cleanup_Address : Unbounded_String;
-      Pid             : GNAT.Expect.Process_Descriptor;
-      Socket          : Socket_Handle;
-      Available       : Boolean;
+      Socket_Address : Unbounded_String;
+      Cleanup_Path   : Unbounded_String;
+      Pid            : GNAT.Expect.Process_Descriptor;
+      Socket         : Socket_Handle;
+      Available      : Boolean;
    end record;
 
-   function Send_Receive
-     (Cont    : Socket_Container;
-      Request : Ada.Streams.Stream_Element_Array)
-      return Ada.Streams.Stream_Element_Array;
-   --  Send given data as request to spawn manager. Return data of received
-   --  reply.
-
-   L : Log_Procedure := null;
-   --  Log procedure.
+   Pool_Log : Log_Procedure := null;
+   --  Diagnostic callback selected for the complete pool lifecycle.
 
    Cmd_Buffer_Size : Ada.Streams.Stream_Element_Offset;
    --  Size of the command send/receive buffer and stream array.
