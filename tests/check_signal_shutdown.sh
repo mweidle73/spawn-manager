@@ -20,6 +20,7 @@ source_root=${1:?source root is required}
 signals_body=$source_root/tools/spawn-signals.adb
 signals_spec=$source_root/tools/spawn-signals.ads
 manager_body=$source_root/tools/spawn_manager.adb
+posix_core=$source_root/src/spawn-posix.c
 
 # The attached handler runs in a GNAT interrupt-server task. Keep it to the
 # synchronized C containment hook and immediate process exit; the pool owns
@@ -55,6 +56,16 @@ if grep -E '(Set_Running|Stopped)' \
 	"$signals_body" "$signals_spec" "$manager_body" >/dev/null
 then
 	echo "signal handler reintroduces redundant Ada request state" >&2
+	exit 1
+fi
+
+# GNAT's interrupt-server tasks make the manager multi-threaded. Its executing
+# thread must use pthread_sigmask, while the single surviving post-fork child
+# keeps the async-signal-safe sigprocmask call until execve.
+manager_mask_calls=$(grep -c 'pthread_sigmask(' "$posix_core")
+child_mask_calls=$(grep -Ec '(^|[^_])sigprocmask\(' "$posix_core")
+if test "$manager_mask_calls" -ne 1 || test "$child_mask_calls" -ne 1; then
+	echo "signal-mask APIs no longer match manager/child thread ownership" >&2
 	exit 1
 fi
 
