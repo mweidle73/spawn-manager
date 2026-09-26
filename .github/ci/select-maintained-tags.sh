@@ -14,9 +14,10 @@ test -f "$manifest" || {
 }
 
 manifest_tags=$(
-	while IFS=$(printf '\t') read -r tag target extra; do
+	while IFS=$(printf '\t') read -r tag target state extra; do
 		if ! printf '%s\n' "$tag" | grep -Eq "$stable_version" ||
 		   ! printf '%s\n' "$target" | grep -Eq "$commit_id" ||
+		   { test "$state" != planned && test "$state" != published; } ||
 		   test -n "$extra"; then
 			echo "invalid maintained-tag entry: $tag" >&2
 			exit 1
@@ -48,12 +49,15 @@ while IFS=$(printf '\t') read -r tag mirror_tag_sha; do
 	fi
 done < "$mirror_tags"
 
-while IFS=$(printf '\t') read -r tag expected_target; do
+while IFS=$(printf '\t') read -r tag expected_target state; do
 	mirror_tag_sha=$(awk -F '\t' -v wanted="$tag" \
 		'$1 == wanted { print $2 }' "$mirror_tags")
 	upstream_tag_sha=$(awk -F '\t' -v wanted="$tag" \
 		'$1 == wanted { print $2 }' "$upstream_tags")
-	if test -n "$mirror_tag_sha"; then
+	if test "$state" = published && test -z "$mirror_tag_sha"; then
+		echo "published maintained tag $tag is missing from the mirror" >&2
+		exit 1
+	elif test -n "$mirror_tag_sha"; then
 		printf '%s\t%s\torigin\n' "$tag" "$expected_target"
 	elif test -n "$upstream_tag_sha"; then
 		printf '%s\t%s\tupstream\n' "$tag" "$expected_target"

@@ -15,7 +15,7 @@ upstream=$test_root/upstream
 output=$test_root/output
 
 approved_target=1111111111111111111111111111111111111111
-printf 'v0.1.0\t%s\n' "$approved_target" > "$manifest"
+printf 'v0.1.0\t%s\tplanned\n' "$approved_target" > "$manifest"
 printf 'v0.1.0\tmaintained-object\n' > "$mirror"
 : > "$upstream"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"
@@ -31,7 +31,7 @@ test ! -s "$output"
 # A later release uses the same policy and is checked if it appears upstream
 # before the reviewed GitHub tag is published.
 future_target=2222222222222222222222222222222222222222
-printf 'v0.2.0\t%s\n' "$future_target" > "$manifest"
+printf 'v0.2.0\t%s\tplanned\n' "$future_target" > "$manifest"
 : > "$mirror"
 printf 'v0.2.0\tupstream-object\n' > "$upstream"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"
@@ -41,6 +41,33 @@ test "$(cat "$output")" = \
 # Once present on both sides, the mirror copy is the verification source.
 printf 'v0.2.0\tshared-object\n' > "$mirror"
 printf 'v0.2.0\tshared-object\n' > "$upstream"
+"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+test "$(cat "$output")" = \
+	"$(printf 'v0.2.0\t%s\torigin' "$future_target")"
+
+# A planned tag may be absent; a published tag may not disappear from GitHub.
+: > "$mirror"
+: > "$upstream"
+"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+test ! -s "$output"
+printf 'v0.2.0\t%s\tpublished\n' "$future_target" > "$manifest"
+if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+then
+	echo "missing published maintained tag was accepted" >&2
+	exit 1
+fi
+grep -F "published maintained tag v0.2.0 is missing" "$output" >/dev/null
+
+# An upstream copy must not hide deletion of the published GitHub ref.
+printf 'v0.2.0\tupstream-object\n' > "$upstream"
+if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+then
+	echo "upstream copy replaced a missing published mirror tag" >&2
+	exit 1
+fi
+grep -F "published maintained tag v0.2.0 is missing" "$output" >/dev/null
+
+printf 'v0.2.0\tmirror-object\n' > "$mirror"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"
 test "$(cat "$output")" = \
 	"$(printf 'v0.2.0\t%s\torigin' "$future_target")"
@@ -55,7 +82,7 @@ then
 fi
 grep -F "v1.0.0 is not declared as maintained" "$output" >/dev/null
 
-printf 'v0.1.0\t%s\nv0.1.0\t%s\n' \
+printf 'v0.1.0\t%s\tplanned\nv0.1.0\t%s\tplanned\n' \
 	"$approved_target" "$approved_target" > "$manifest"
 if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
 then
@@ -64,7 +91,7 @@ then
 fi
 grep -F "duplicate entries" "$output" >/dev/null
 
-printf 'v0.2.0-rc1\t%s\n' "$approved_target" > "$manifest"
+printf 'v0.2.0-rc1\t%s\tplanned\n' "$approved_target" > "$manifest"
 if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
 then
 	echo "non-stable maintained tag was accepted" >&2
@@ -72,10 +99,18 @@ then
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
 
-printf 'v0.2.0\tnot-a-commit\n' > "$manifest"
+printf 'v0.2.0\tnot-a-commit\tplanned\n' > "$manifest"
 if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
 then
 	echo "invalid maintained target was accepted" >&2
+	exit 1
+fi
+grep -F "invalid maintained-tag entry" "$output" >/dev/null
+
+printf 'v0.2.0\t%s\tunknown\n' "$approved_target" > "$manifest"
+if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+then
+	echo "invalid maintained publication state was accepted" >&2
 	exit 1
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
@@ -105,7 +140,7 @@ grep -F "expected $approved_target" "$output" >/dev/null
 
 # An upstream-first future tag is selected and then rejected on a wrong target.
 git -C "$tag_repo" tag -a v0.2.0 -m "wrong upstream annotation"
-printf 'v0.2.0\t%s\n' "$approved_target" > "$manifest"
+printf 'v0.2.0\t%s\tplanned\n' "$approved_target" > "$manifest"
 : > "$mirror"
 printf 'v0.2.0\tupstream-tag-object\n' > "$upstream"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"

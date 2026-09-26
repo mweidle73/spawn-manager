@@ -54,22 +54,24 @@ Set `SPAWN_CI_IMAGE` to override the local image name,
 
 The weekly upstream monitor compares `master` and Codelabs-owned tag refs with
 Codelabs. Annotated stable semantic-version tags maintained for the Abuild
-integration may exist only on GitHub when their exact names and peeled target
-commits are declared in `.github/maintained-release-tags`; the workflow
-validates and preserves them but never creates or updates them. Add a release
-and its reviewed target commit to that manifest before creating its annotated
-tag. An undeclared mirror-only tag, lightweight tag or mismatched target blocks
-the sync. A declared tag is verified even if it appears on Codelabs before it
-is published on GitHub. This also blocks a tag which was previously supplied
-and later deleted by Codelabs.
+integration may exist only on GitHub when their exact names, peeled target
+commits and `planned` or `published` states are declared in
+`.github/maintained-release-tags`; the workflow validates and preserves them
+but never creates or updates them. A planned tag may be absent. A published tag
+must remain on GitHub. An undeclared mirror-only tag, lightweight tag or
+mismatched target blocks the sync. A declared tag is verified even if it
+appears on Codelabs before it is published on GitHub. An upstream copy cannot
+hide deletion of a published GitHub tag.
 
 The manifest remains the release registry after the reconstructed 0.1.x
 history. For each later release, including `v0.2.0`, use this order:
 
 1. Finalize the source release commit and changelog on `abuild`.
-2. Add the stable tag name and that commit's full object ID to
+2. Add the stable tag name, that commit's full object ID and state `planned` to
    `.github/maintained-release-tags` on `abuild-gh`, then review and merge the
    policy change.
 3. Create and publish the annotated tag at exactly that source commit.
+4. Change its manifest state to `published` in a reviewed follow-up. That
+   state makes later deletion a synchronization failure.
 
 Do not reserve a placeholder object ID before the release commit is final.
