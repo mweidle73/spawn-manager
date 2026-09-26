@@ -52,16 +52,22 @@ Set `SPAWN_CI_IMAGE` to override the local image name,
 `DOCKER_PLATFORM` to override the default `linux/amd64` platform, and
 `SPAWN_CI_NETWORK` to override the default `none` network mode.
 
-The weekly upstream monitor compares `master` and Codelabs-owned tag refs with
-Codelabs. Annotated stable semantic-version tags maintained for the Abuild
-integration may exist only on GitHub when their exact names, peeled target
-commits and `planned` or `published` states are declared in
-`.github/maintained-release-tags`; the workflow validates and preserves them
-but never creates or updates them. A planned tag may be absent. A published tag
-must remain on GitHub. An undeclared mirror-only tag, lightweight tag or
-mismatched target blocks the sync. A declared tag is verified even if it
-appears on Codelabs before it is published on GitHub. An upstream copy cannot
-hide deletion of a published GitHub tag.
+The weekly upstream monitor compares `master` and every Codelabs-owned tag ref
+with Codelabs. It mirrors those authoritative upstream tag objects exactly,
+regardless of whether they represent an Abuild release.
+
+Annotated stable semantic-version tags maintained for the Abuild integration
+may exist only on GitHub when their exact names, peeled target commits and
+`planned` or `published` states are declared in
+`.github/maintained-release-tags`. The workflow never synthesizes or rewrites
+a tag object. It preserves GitHub-only tags and may copy a declared
+upstream-first tag object to GitHub after validating its annotation and target.
+If a declared name already exists on both remotes, the complete annotated tag
+objects must match; equal peeled commits do not excuse different release
+annotations. A planned tag may be absent. A published tag must remain on
+GitHub. An undeclared mirror-only tag, lightweight tag or mismatched target
+blocks the sync. An upstream copy cannot hide deletion of a published GitHub
+tag.
 
 The manifest remains the release registry after the reconstructed 0.1.x
 history. For each later release, including `v0.2.0`, use this order:
