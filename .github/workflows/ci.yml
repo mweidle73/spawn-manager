@@ -45,6 +45,10 @@ jobs:
             exit 1
           fi
 
+      - name: Verify maintained release-tag policy
+        shell: bash
+        run: .github/ci/test-maintained-tags.sh
+
       - name: Build Spawn Manager and run its unit tests
         shell: bash
         run: |

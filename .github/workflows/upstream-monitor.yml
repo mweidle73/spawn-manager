@@ -45,7 +45,8 @@ jobs:
 
           mirror_tags=$(mktemp)
           upstream_tags=$(mktemp)
-          trap 'rm -f "$mirror_tags" "$upstream_tags"' EXIT
+          maintained_tags=$(mktemp)
+          trap 'rm -f "$mirror_tags" "$upstream_tags" "$maintained_tags"' EXIT
           list_release_tags() {
             git ls-remote --tags "$1" |
               awk '$2 !~ /\^\{\}$/ {
@@ -78,15 +79,13 @@ jobs:
 
           maintained_tag_count=0
           invalid_maintained_tag=
-          while IFS=$'\t' read -r tag mirror_tag_sha; do
-            test -n "$tag" || continue
-            upstream_tag_sha=$(awk -F '\t' -v wanted="$tag" '$1 == wanted { print $2 }' "$upstream_tags")
-            if test -z "$upstream_tag_sha"; then
-              if ! printf '%s\n' "$tag" | grep -Eq \
-                '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-                invalid_maintained_tag="$tag is not a stable semantic-version tag"
-                break
-              fi
+          if ! .github/ci/select-maintained-tags.sh \
+            .github/maintained-release-tags \
+            "$mirror_tags" "$upstream_tags" > "$maintained_tags"; then
+            invalid_maintained_tag='maintained release-tag policy failed'
+          else
+            while IFS= read -r tag; do
+              test -n "$tag" || continue
               if ! git fetch --no-tags origin \
                 "refs/tags/$tag:refs/tags/$tag"; then
                 invalid_maintained_tag="could not fetch maintained tag $tag"
@@ -97,8 +96,8 @@ jobs:
                 break
               fi
               maintained_tag_count=$((maintained_tag_count + 1))
-            fi
-          done < "$mirror_tags"
+            done < "$maintained_tags"
+          fi
 
           tag_count_before=$(wc -l < "$mirror_tags" | tr -d ' ')
           upstream_tag_count=$(wc -l < "$upstream_tags" | tr -d ' ')

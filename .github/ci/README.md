@@ -54,5 +54,9 @@ Set `SPAWN_CI_IMAGE` to override the local image name,
 
 The weekly upstream monitor compares `master` and Codelabs-owned tag refs with
 Codelabs. Annotated stable semantic-version tags maintained for the Abuild
-integration may exist only on GitHub; the workflow validates and preserves
-them but never creates or updates them.
+integration may exist only on GitHub when their exact names are declared in
+`.github/maintained-release-tags`; the workflow validates and preserves them
+but never creates or updates them. Add a release to that reviewed manifest
+before creating its annotated tag. An undeclared mirror-only tag blocks the
+sync, including a tag which was previously supplied and later deleted by
+Codelabs.
