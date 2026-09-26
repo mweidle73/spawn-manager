@@ -52,13 +52,18 @@ identifier or single-request cancel operation. Add this only for a concrete
 concurrent consumer. Define identity, races, result classification and manager
 reuse before choosing a wire format.
 
-### Descriptor-ceiling refresh
+### Descriptor-ceiling fallbacks
 
-A failed `/proc/self/fd` scan selects the finite soft-limit fallback and caches
-the safe result. This is safe but may retain slower descriptor cleanup after a
-transient procfs failure. Measure a reproducible impact first. If material,
-define a bounded retry or refresh rule without allowing a partial procfs scan
-to lower the ceiling.
+A failed `/proc/self/fd` scan with a finite soft descriptor limit selects and
+caches that limit. If the limit is `RLIM_INFINITY`, the current implementation
+consults `sysconf(_SC_OPEN_MAX)`; its result is not yet an accepted portable
+version-1 contract. Add fault injection for an unlimited limit with both
+procfs and `close_range` unavailable. The request must fail at descriptor
+closure instead of attempting an effectively unbounded sweep.
+
+Separately measure whether caching a finite fallback after a transient procfs
+failure has a material cost. If so, define a bounded retry or refresh rule
+without allowing a partial procfs scan to lower the ceiling.
 
 ### Invalid-descriptor diagnostics
 
