@@ -86,15 +86,16 @@ jobs:
             "$mirror_tags" "$upstream_tags" > "$maintained_tags"; then
             invalid_maintained_tag='maintained release-tag policy failed'
           else
-            while IFS= read -r tag; do
+            while IFS=$'\t' read -r tag expected_target; do
               test -n "$tag" || continue
               if ! git fetch --no-tags origin \
                 "refs/tags/$tag:refs/tags/$tag"; then
                 invalid_maintained_tag="could not fetch maintained tag $tag"
                 break
               fi
-              if test "$(git cat-file -t "refs/tags/$tag")" != tag; then
-                invalid_maintained_tag="$tag is not an annotated tag"
+              if ! .github/ci/verify-maintained-tag.sh \
+                "$tag" "$expected_target"; then
+                invalid_maintained_tag="$tag failed identity verification"
                 break
               fi
               maintained_tag_count=$((maintained_tag_count + 1))
