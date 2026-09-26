@@ -23,7 +23,7 @@ all: $(HTML_DOCUMENTS)
 $(DESTDIR):
 	mkdir -p $@
 
-$(DESTDIR)/index.html: ../README.md | $(DESTDIR)
+$(DESTDIR)/index.html: ../README.md Makefile | $(DESTDIR)
 	$(PANDOC) $(PANDOC_OPTS) --metadata pagetitle="Ada Spawn Manager" \
 		-o $@.tmp $<
 	sed \
@@ -37,15 +37,15 @@ $(DESTDIR)/index.html: ../README.md | $(DESTDIR)
 		$@.tmp > $@
 	rm -f $@.tmp
 
-$(DESTDIR)/CHANGELOG.html: ../CHANGELOG.md | $(DESTDIR)
+$(DESTDIR)/CHANGELOG.html: ../CHANGELOG.md Makefile | $(DESTDIR)
 	$(PANDOC) $(PANDOC_OPTS) --metadata pagetitle="Spawn Manager changelog" \
 		-o $@ $<
 
-$(DESTDIR)/WORK_QUEUE.html: ../WORK_QUEUE.md | $(DESTDIR)
+$(DESTDIR)/WORK_QUEUE.html: ../WORK_QUEUE.md Makefile | $(DESTDIR)
 	$(PANDOC) $(PANDOC_OPTS) --metadata pagetitle="Spawn Manager work queue" \
 		-o $@ $<
 
-$(DESTDIR)/protocol-v1.html: protocol-v1.md | $(DESTDIR)
+$(DESTDIR)/protocol-v1.html: protocol-v1.md Makefile | $(DESTDIR)
 	$(PANDOC) $(PANDOC_OPTS) --metadata pagetitle="Protocol version 1" \
 		-o $@.tmp $<
 	sed \
@@ -53,7 +53,7 @@ $(DESTDIR)/protocol-v1.html: protocol-v1.md | $(DESTDIR)
 		$@.tmp > $@
 	rm -f $@.tmp
 
-$(DESTDIR)/lifecycle-v1.html: lifecycle-v1.md | $(DESTDIR)
+$(DESTDIR)/lifecycle-v1.html: lifecycle-v1.md Makefile | $(DESTDIR)
 	$(PANDOC) $(PANDOC_OPTS) --metadata pagetitle="Lifecycle version 1" \
 		-o $@.tmp $<
 	sed \
@@ -62,7 +62,7 @@ $(DESTDIR)/lifecycle-v1.html: lifecycle-v1.md | $(DESTDIR)
 		$@.tmp > $@
 	rm -f $@.tmp
 
-$(DESTDIR)/styles.css: css/styles.css | $(DESTDIR)
+$(DESTDIR)/styles.css: css/styles.css Makefile | $(DESTDIR)
 	cp $< $@
 
 clean:
