@@ -53,8 +53,22 @@ jobs:
             doc/html/protocol-v1.html
           grep -Fq '<h1 id="spawn-manager-lifecycle-version-1">' \
             doc/html/lifecycle-v1.html
-          if grep -R -E 'href="[^"]+\.md' doc/html/*.html; then
-            echo 'Generated documentation contains a Markdown link' >&2
+          unexpected_links=$(
+            grep -h -Eo 'href="[^"]+"' doc/html/*.html |
+              sed -e 's/^href="//' -e 's/"$//' |
+              grep -Ev \
+                -e '^#' \
+                -e '^https?://' \
+                -e '^mailto:' \
+                -e '^CHANGELOG\.html($|#)' \
+                -e '^protocol-v1\.html($|#)' \
+                -e '^lifecycle-v1\.html($|#)' \
+                -e '^styles\.css$' ||
+              true
+          )
+          if test -n "$unexpected_links"; then
+            echo 'Generated documentation contains unpublished local links:' >&2
+            echo "$unexpected_links" >&2
             exit 1
           fi
           test -z "$(find doc/html -type l -print -quit)"

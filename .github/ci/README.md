@@ -53,6 +53,6 @@ Set `SPAWN_CI_IMAGE` to override the local image name,
 `SPAWN_CI_NETWORK` to override the default `none` network mode.
 
 The weekly upstream monitor compares `master` and Codelabs-owned tag refs with
-Codelabs. Annotated semantic-version tags maintained for the Abuild integration
-may exist only on GitHub; the workflow validates and preserves them but never
-creates or updates them.
+Codelabs. Annotated stable semantic-version tags maintained for the Abuild
+integration may exist only on GitHub; the workflow validates and preserves
+them but never creates or updates them.
