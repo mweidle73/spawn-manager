@@ -123,9 +123,14 @@ caller and the dedicated process manager.
 
 ## Branch and release policy
 
-- `master` mirrors the Codelabs upstream. `abuild` is the exact source revision
-  consumed by Abuild. `abuild-gh` may differ from `abuild` only below
+- `master` mirrors the Codelabs upstream. `abuild` is the maintained
+  integration line containing every revision referenced by an Abuild Gitlink;
+  its tip may also advance for reviewed tests or documentation. `abuild-gh`
+  contains an accepted `abuild` tip and may differ from it only below
   `.github/`.
+- Advance the published `abuild-gh` branch only through a reviewed merge which
+  retains the accepted `abuild` ancestry and GitHub overlay history. Never
+  reset, rebase or force-push `abuild-gh`.
 - Component releases use annotated stable tags named `vMAJOR.MINOR.PATCH`.
   Pure test or documentation changes do not require a release tag.
 - Historical 0.1.x tags follow Abuild's maintained Gitlink sequence even where
