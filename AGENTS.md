@@ -3,6 +3,16 @@
 Keep changes focused and preserve the separation between the tasking Ada
 caller and the dedicated process manager.
 
+## Scope and decisions
+
+- Ask before changing scope, compatibility or architecture. Record an agreed
+  protocol or lifecycle decision in the corresponding durable document and
+  put accepted later work in `WORK_QUEUE.md`.
+- Treat historical branches, tags and documents as evidence, not authority.
+  Verify claims against the containing revision and current primary sources.
+- Commit a completed, tested step before starting a distinct follow-up. Do not
+  hand a reviewer an uncommitted or deliberately moving implementation.
+
 ## Relevant documentation
 
 - Use `README.md` for the component overview, supported platform and normal
@@ -21,10 +31,16 @@ caller and the dedicated process manager.
   The tests use disposable local fixtures and have no production access.
 - Run `make doc` after changing Markdown, Pages links or documentation build
   rules. Run `make perf` only for execution-path or performance work.
+- Build the relevant prerequisites before running a binary. Treat every CI job
+  as an independent checkout and transfer required artifacts explicitly.
+- For a regression, prove that the new test fails with the defect and passes
+  with the fix. Run unit tests sequentially unless the test itself exercises
+  concurrency.
 
 ## Source style
 
 - Keep manually maintained Ada and C source lines within 80 columns.
+- End every source and documentation file with a newline.
 - Ada uses three-space indentation and the surrounding GNAT style. Align named
   associations, retain blank lines between declaration groups and logical
   phases, and keep the build warning-free without redundant `use` clauses.
@@ -37,6 +53,11 @@ caller and the dedicated process manager.
   unrelated phases. Extract a named helper when a subprogram develops several
   independent responsibilities, deeply nested branches or a second resource
   lifecycle. Prefer semantic structure over an arbitrary line-count target.
+- Open in-process Ada file streams with `Form => "shared=no"` unless a
+  documented contract requires shared external modification.
+- For mutable Ada state reachable by concurrent requests, state whether it is
+  task-local, immutable, protected or owned by one manager. Test concurrent
+  access, or document and test the lifecycle invariant which excludes it.
 - Give every added or materially changed Ada subprogram declaration an
   immediately adjacent semantic contract comment, including local helpers and
   test specifications. Put a blank line after each declaration/comment pair.
@@ -55,6 +76,9 @@ caller and the dedicated process manager.
   and self-evident assignments do not need narration.
 - Test comments explain the regression being detected and why the fixture is
   sensitive to it. Re-read every touched comment after a refactor.
+- Before adding a binary, checksum or byte-manipulation primitive, inspect the
+  Ada runtime and existing helpers. Keep independent test decoders and byte
+  constants separate from the production encoder.
 
 ## Commits
 
@@ -65,6 +89,8 @@ caller and the dedicated process manager.
 - Keep subjects at 50 characters or fewer and body lines at 72 characters or
   fewer. Use the body to explain motivation, behavior and important evidence;
   keep each commit bisect-clean.
+- Wrap body prose into balanced paragraphs rather than leaving dangling words.
+  Re-check every message against its final diff after rebases and fixups.
 - Spawn Manager is an Abuild dependency repository, so commit messages omit
   the Abuild Jira ticket. Do not add generated sign-off or co-author trailers.
 
@@ -108,3 +134,10 @@ caller and the dedicated process manager.
 3. Reject any lifecycle path that can reuse a manager after uncertain setup,
    containment, signaling or reaping, or that regresses socket-length and
    `no_new_privs` guarantees.
+4. Re-read the complete diff after code, tests and documentation have settled.
+   Verify test sensitivity, concurrency, protocol and lifecycle documentation,
+   changelog and work-queue consistency, commit-message limits, whitespace and
+   a clean worktree before asking for external review.
+5. Keep internal product, customer and infrastructure names out of permanent
+   source, fixtures, documentation and commit messages unless their spelling is
+   part of a public interface under test.
