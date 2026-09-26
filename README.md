@@ -152,6 +152,16 @@ The original repository is available from
 integration and its GitHub-specific CI overlay are mirrored at
 [github.com/mweidle73/spawn-manager](https://github.com/mweidle73/spawn-manager).
 
+The maintained branches have distinct roles:
+
+- `master` mirrors the current Codelabs upstream history.
+- `abuild` is the maintained integration line containing every Spawn Manager
+  revision referenced by an Abuild Gitlink. Its tip may move for reviewed
+  tests or documentation without requiring the current Gitlink to move.
+- `abuild-gh` is the GitHub delivery overlay. It contains an accepted `abuild`
+  tip plus GitHub-only files below `.github/`. Advance this published branch
+  through reviewed merges; never reset, rebase or force-push it.
+
 ## Authors and licence
 
 Copyright (C) 2011-2026 secunet Security Networks AG
