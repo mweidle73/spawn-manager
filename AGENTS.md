@@ -21,7 +21,43 @@ caller and the dedicated process manager.
   The tests use disposable local fixtures and have no production access.
 - Run `make doc` after changing Markdown, Pages links or documentation build
   rules. Run `make perf` only for execution-path or performance work.
-- Do not add generated sign-off or co-author trailers to commits.
+
+## Source style
+
+- Keep manually maintained Ada and C source lines within 80 columns.
+- Ada uses three-space indentation and the surrounding GNAT style. Align named
+  associations, retain blank lines between declaration groups and logical
+  phases, and keep the build warning-free without redundant `use` clauses.
+- Give every added or materially changed Ada subprogram declaration an
+  immediately adjacent semantic contract comment, including local helpers and
+  test specifications. Put a blank line after each declaration/comment pair.
+- Separate consecutive package-level Ada subprogram bodies with one plain
+  `-------------------------------------------------------------------------`
+  line. Do not add named three-line banners.
+- C uses tabs for indentation, C11 and the existing brace layout. The supported
+  warning set is `-W -Wall -Wextra -Werror`; do not silence it with unused
+  state or casts which hide ownership or type errors.
+- Put a concise contract comment immediately above every C function, including
+  static helpers. State ownership, failure behavior or the relevant POSIX
+  operation instead of restating the name.
+- Label the non-obvious phases of long execution paths. Comments are mandatory
+  around post-`fork` safety, descriptor ownership, signal masks, process-group
+  identity, reaping, kernel fallbacks and fail-stop cleanup. Ordinary syntax
+  and self-evident assignments do not need narration.
+- Test comments explain the regression being detected and why the fixture is
+  sensitive to it. Re-read every touched comment after a refactor.
+
+## Commits
+
+- Use Conventional Commit subjects such as `build`, `chore`, `ci`, `docs`,
+  `feat`, `fix`, `perf`, `refactor` and `test`, with an optional narrow scope.
+- Reserve `fix` for released user-visible behavior. Corrections within an
+  unreleased series use the type which describes the resulting change.
+- Keep subjects at 50 characters or fewer and body lines at 72 characters or
+  fewer. Use the body to explain motivation, behavior and important evidence;
+  keep each commit bisect-clean.
+- Spawn Manager is an Abuild dependency repository, so commit messages omit
+  the Abuild Jira ticket. Do not add generated sign-off or co-author trailers.
 
 ## Architecture invariants
 
@@ -51,6 +87,8 @@ caller and the dedicated process manager.
   Pure test or documentation changes do not require a release tag.
 - Historical 0.1.x tags follow Abuild's maintained Gitlink sequence even where
   that sequence moved between Spawn Manager branches.
+- Keep accepted follow-up work in `WORK_QUEUE.md`; assign a ticket before
+  implementation or delivery rather than hiding future scope in a review note.
 
 ## Code review rules
 
