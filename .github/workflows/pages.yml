@@ -39,10 +39,24 @@ jobs:
         run: |
           set -euo pipefail
           test -s doc/html/index.html
+          test -s doc/html/CHANGELOG.html
+          test -s doc/html/protocol-v1.html
+          test -s doc/html/lifecycle-v1.html
+          test -s doc/html/styles.css
           grep -Fq '<title>Ada Spawn Manager</title>' doc/html/index.html
-          grep -Fq '<h1>Ada Spawn Manager</h1>' doc/html/index.html
-          grep -Fq 'git.codelabs.ch/git/spawn-manager.git' \
+          grep -Fq '<h1 id="ada-spawn-manager">Ada Spawn Manager</h1>' \
             doc/html/index.html
+          grep -Fq 'git.codelabs.ch/?p=spawn-manager.git' doc/html/index.html
+          grep -Fq '<h1 id="changelog">Changelog</h1>' \
+            doc/html/CHANGELOG.html
+          grep -Fq '<h1 id="spawn-manager-protocol-version-1">' \
+            doc/html/protocol-v1.html
+          grep -Fq '<h1 id="spawn-manager-lifecycle-version-1">' \
+            doc/html/lifecycle-v1.html
+          if grep -R -E 'href="[^"]+\.md' doc/html/*.html; then
+            echo 'Generated documentation contains a Markdown link' >&2
+            exit 1
+          fi
           test -z "$(find doc/html -type l -print -quit)"
 
       - name: Upload the GitHub Pages artifact

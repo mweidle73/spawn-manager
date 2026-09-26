@@ -76,13 +76,27 @@ jobs:
             fi
           done < "$upstream_tags"
 
-          mirror_only_tag=
+          maintained_tag_count=0
+          invalid_maintained_tag=
           while IFS=$'\t' read -r tag mirror_tag_sha; do
             test -n "$tag" || continue
             upstream_tag_sha=$(awk -F '\t' -v wanted="$tag" '$1 == wanted { print $2 }' "$upstream_tags")
             if test -z "$upstream_tag_sha"; then
-              mirror_only_tag=$tag
-              break
+              if ! printf '%s\n' "$tag" | grep -Eq \
+                '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+                invalid_maintained_tag="$tag is not a semantic-version tag"
+                break
+              fi
+              if ! git fetch --no-tags origin \
+                "refs/tags/$tag:refs/tags/$tag"; then
+                invalid_maintained_tag="could not fetch maintained tag $tag"
+                break
+              fi
+              if test "$(git cat-file -t "refs/tags/$tag")" != tag; then
+                invalid_maintained_tag="$tag is not an annotated tag"
+                break
+              fi
+              maintained_tag_count=$((maintained_tag_count + 1))
             fi
           done < "$mirror_tags"
 
@@ -111,9 +125,11 @@ jobs:
               echo
               echo "Release tags upstream: $upstream_tag_count"
               echo
+              echo "Maintained Abuild release tags: $maintained_tag_count"
+              echo
               echo "Release tags selected for addition: $tag_add_count"
               echo
-              echo "Release-tag refs match after sync: $tags_match"
+              echo "Codelabs tag refs match after sync: $tags_match"
               echo
               echo "Result: $sync_status"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -131,8 +147,8 @@ jobs:
             echo "$sync_status" >&2
             exit 1
           fi
-          if test -n "$mirror_only_tag"; then
-            sync_status="blocked: release tag $mirror_only_tag exists only on GitHub"
+          if test -n "$invalid_maintained_tag"; then
+            sync_status="blocked: $invalid_maintained_tag"
             write_summary
             echo "$sync_status" >&2
             exit 1
@@ -152,9 +168,14 @@ jobs:
           )
           list_release_tags origin > "$mirror_tags"
           tags_match=true
-          if ! diff -u "$mirror_tags" "$upstream_tags"; then
-            tags_match=false
-          fi
+          while IFS=$'\t' read -r tag upstream_tag_sha; do
+            test -n "$tag" || continue
+            mirror_tag_sha=$(awk -F '\t' -v wanted="$tag" '$1 == wanted { print $2 }' "$mirror_tags")
+            if test "$mirror_tag_sha" != "$upstream_tag_sha"; then
+              tags_match=false
+              break
+            fi
+          done < "$upstream_tags"
 
           if test "$final_mirror_sha" != "$upstream_sha" || test "$tags_match" != true; then
             sync_status='failed: post-push verification differs from upstream'
