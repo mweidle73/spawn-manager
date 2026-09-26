@@ -31,7 +31,8 @@ execution core. There is no intermediate `spawn_wrapper` process.
 
 The next release is **0.2.0**. It introduces structured execution while
 retaining the existing shell API. The release contents are collected in the
-[changelog](CHANGELOG.md).
+[changelog](CHANGELOG.md); accepted later work is tracked in the
+[work queue](WORK_QUEUE.md).
 
 The current execution core is Linux-specific. It relies on Unix-domain
 sockets, process groups, `prctl(2)`, `/proc` and POSIX process and signal
