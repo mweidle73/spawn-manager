@@ -6,6 +6,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 selector=$script_dir/select-maintained-tags.sh
 verifier=$script_dir/verify-maintained-tag.sh
 workflow=$script_dir/../workflows/upstream-monitor.yml
+ci_workflow=$script_dir/../workflows/ci.yml
+real_manifest=$script_dir/../maintained-release-tags
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/spawn-maintained-tags.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 
@@ -13,6 +15,10 @@ manifest=$test_root/manifest
 mirror=$test_root/mirror
 upstream=$test_root/upstream
 output=$test_root/output
+
+# Keep the reviewed production manifest in lockstep with its parser.
+"$selector" "$real_manifest" /dev/null /dev/null > "$output"
+test ! -s "$output"
 
 approved_target=1111111111111111111111111111111111111111
 printf 'v0.1.0\t%s\tplanned\n' "$approved_target" > "$manifest"
@@ -188,5 +194,7 @@ if grep -F 'mirror_sha=$(git rev-parse HEAD)' "$workflow" >/dev/null; then
 	echo "upstream monitor compares its overlay checkout instead of master" >&2
 	exit 1
 fi
+grep -F "overlay does not contain current origin/abuild" "$ci_workflow" \
+	>/dev/null
 
 echo "Maintained release-tag provenance policy verified"
