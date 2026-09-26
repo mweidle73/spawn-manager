@@ -41,12 +41,21 @@ while IFS=$(printf '\t') read -r tag mirror_tag_sha; do
 	upstream_tag_sha=$(awk -F '\t' -v wanted="$tag" \
 		'$1 == wanted { print $2 }' "$upstream_tags")
 	if test -z "$upstream_tag_sha"; then
-		manifest_entry=$(awk -F '\t' -v wanted="$tag" \
-			'$1 == wanted { print $1 "\t" $2 }' "$manifest")
-		if test -z "$manifest_entry"; then
+		if ! printf '%s\n' "$manifest_tags" | grep -Fxq "$tag"; then
 			echo "mirror-only tag $tag is not declared as maintained" >&2
 			exit 1
 		fi
-		printf '%s\n' "$manifest_entry"
 	fi
 done < "$mirror_tags"
+
+while IFS=$(printf '\t') read -r tag expected_target; do
+	mirror_tag_sha=$(awk -F '\t' -v wanted="$tag" \
+		'$1 == wanted { print $2 }' "$mirror_tags")
+	upstream_tag_sha=$(awk -F '\t' -v wanted="$tag" \
+		'$1 == wanted { print $2 }' "$upstream_tags")
+	if test -n "$mirror_tag_sha"; then
+		printf '%s\t%s\torigin\n' "$tag" "$expected_target"
+	elif test -n "$upstream_tag_sha"; then
+		printf '%s\t%s\tupstream\n' "$tag" "$expected_target"
+	fi
+done < "$manifest"

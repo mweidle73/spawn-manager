@@ -19,13 +19,31 @@ printf 'v0.1.0\t%s\n' "$approved_target" > "$manifest"
 printf 'v0.1.0\tmaintained-object\n' > "$mirror"
 : > "$upstream"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"
-test "$(cat "$output")" = "$(printf 'v0.1.0\t%s' "$approved_target")"
+test "$(cat "$output")" = \
+	"$(printf 'v0.1.0\t%s\torigin' "$approved_target")"
 
 # An exact upstream tag needs no maintained ownership declaration.
 printf 'v1.0.0\tshared-object\n' > "$mirror"
 printf 'v1.0.0\tshared-object\n' > "$upstream"
 "$selector" "$manifest" "$mirror" "$upstream" > "$output"
 test ! -s "$output"
+
+# A later release uses the same policy and is checked if it appears upstream
+# before the reviewed GitHub tag is published.
+future_target=2222222222222222222222222222222222222222
+printf 'v0.2.0\t%s\n' "$future_target" > "$manifest"
+: > "$mirror"
+printf 'v0.2.0\tupstream-object\n' > "$upstream"
+"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+test "$(cat "$output")" = \
+	"$(printf 'v0.2.0\t%s\tupstream' "$future_target")"
+
+# Once present on both sides, the mirror copy is the verification source.
+printf 'v0.2.0\tshared-object\n' > "$mirror"
+printf 'v0.2.0\tshared-object\n' > "$upstream"
+"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+test "$(cat "$output")" = \
+	"$(printf 'v0.2.0\t%s\torigin' "$future_target")"
 
 # A deleted upstream tag becomes mirror-only and must not be reclassified.
 printf 'v1.0.0\tformer-upstream-object\n' > "$mirror"
@@ -85,6 +103,24 @@ if (
 fi
 grep -F "expected $approved_target" "$output" >/dev/null
 
+# An upstream-first future tag is selected and then rejected on a wrong target.
+git -C "$tag_repo" tag -a v0.2.0 -m "wrong upstream annotation"
+printf 'v0.2.0\t%s\n' "$approved_target" > "$manifest"
+: > "$mirror"
+printf 'v0.2.0\tupstream-tag-object\n' > "$upstream"
+"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+IFS=$(printf '\t') read -r selected_tag selected_target selected_source \
+	< "$output"
+test "$selected_source" = upstream
+if (
+	cd "$tag_repo"
+	"$verifier" "$selected_tag" "$selected_target"
+) > "$output" 2>&1; then
+	echo "wrong upstream-first maintained tag was accepted" >&2
+	exit 1
+fi
+grep -F "expected $approved_target" "$output" >/dev/null
+
 git -C "$tag_repo" tag -f v0.1.0 "$approved_target" >/dev/null
 if (
 	cd "$tag_repo"
@@ -111,6 +147,8 @@ grep -F "does not target a commit" "$output" >/dev/null
 grep -F "ref: abuild-gh" "$workflow" >/dev/null
 grep -F "mirror_ref=refs/remotes/origin/master" "$workflow" >/dev/null
 grep -F 'mirror_sha=$(git rev-parse "$mirror_ref")' "$workflow" >/dev/null
+grep -F 'while IFS=$'"'"'\t'"'"' read -r tag expected_target tag_source' \
+	"$workflow" >/dev/null
 if grep -F 'mirror_sha=$(git rev-parse HEAD)' "$workflow" >/dev/null; then
 	echo "upstream monitor compares its overlay checkout instead of master" >&2
 	exit 1

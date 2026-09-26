@@ -86,9 +86,17 @@ jobs:
             "$mirror_tags" "$upstream_tags" > "$maintained_tags"; then
             invalid_maintained_tag='maintained release-tag policy failed'
           else
-            while IFS=$'\t' read -r tag expected_target; do
+            while IFS=$'\t' read -r tag expected_target tag_source; do
               test -n "$tag" || continue
-              if ! git fetch --no-tags origin \
+              case "$tag_source" in
+                origin) tag_remote=origin ;;
+                upstream) tag_remote=$upstream_url ;;
+                *)
+                  invalid_maintained_tag="$tag has invalid source $tag_source"
+                  break
+                  ;;
+              esac
+              if ! git fetch --no-tags "$tag_remote" \
                 "refs/tags/$tag:refs/tags/$tag"; then
                 invalid_maintained_tag="could not fetch maintained tag $tag"
                 break
