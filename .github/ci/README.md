@@ -2,12 +2,19 @@
 
 This repository is a GitHub mirror/fork of Spawn Manager from
 [codelabs.ch](https://www.codelabs.ch/). The GitHub-only `abuild-gh` branch
-extends the exact source revision consumed by Abuild with CI configuration.
-The three long-lived branches have distinct roles:
+extends the maintained Abuild integration line with CI configuration. The
+three long-lived branches have distinct roles:
 
 - `master` mirrors the Codelabs upstream repository.
-- `abuild` is the exact Spawn Manager revision pinned by Abuild `master`.
-- `abuild-gh` adds only files below `.github/` to `abuild`.
+- `abuild` contains every Spawn Manager revision pinned by an Abuild Gitlink;
+  its tip may also include reviewed test or documentation follow-ups.
+- `abuild-gh` contains an accepted `abuild` tip and adds only files below
+  `.github/` relative to it.
+
+Advance the published `abuild-gh` branch only by merging a reviewed overlay
+topic which already contains the accepted `abuild` tip. Never reset, rebase or
+force-push `abuild-gh`; preserving its merge history keeps earlier GitHub
+changes and reviews inspectable.
 
 The `run` helper builds a minimal Debian Trixie image and starts it as the
 invoking host user. Its root filesystem is read-only, its network is disabled
