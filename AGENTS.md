@@ -32,9 +32,11 @@ caller and the dedicated process manager.
   host-toolchain evidence. Run normal development and tests without root.
 - Build with `make -j8`, then run `make tests` without Make-level parallelism.
   The tests use disposable local fixtures and have no production access.
-- Run `make cov` after changing production Ada or C and inspect the resulting
-  line and function coverage; do not accept a new untested production path
-  merely because the aggregate percentage remains high.
+- Run `make cov` after changing production Ada and inspect the resulting line
+  and function coverage; do not accept a new untested production path merely
+  because the aggregate percentage remains high. For production C, run the
+  direct POSIX suite and report that the current coverage target excludes C
+  until the dedicated follow-up in `WORK_QUEUE.md` is implemented.
 - Run `make doc` after changing Markdown, Pages links or documentation build
   rules. Run `make perf` only for execution-path or performance work.
 - Build the relevant prerequisites before running a binary. Treat every CI job

@@ -5,10 +5,11 @@ library and executable. Version 1 has no handshake, capability negotiation,
 request identifiers or optional flags. A library and manager from one Abuild
 bundle use the same fixed version; a mismatch is rejected.
 
-All offsets are zero-based byte offsets. Integers are unsigned and big-endian
-unless explicitly marked `i64`. Lengths count bytes rather than Ada
-characters. Strings retain their exact non-NUL bytes; the protocol applies no
-text encoding, shell quoting or normalization.
+All offsets are zero-based byte offsets. Every integer is big-endian. Integers
+are unsigned unless explicitly marked `i64`; that field is signed
+two's-complement and uses the same big-endian byte order. Lengths count bytes
+rather than Ada characters. Strings retain their exact non-NUL bytes; the
+protocol applies no text encoding, shell quoting or normalization.
 
 The normative constants and field order are maintained in
 [`Spawn.Protocol`](../src/spawn-protocol.ads). Independent golden-byte tests
