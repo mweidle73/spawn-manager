@@ -121,6 +121,15 @@ then
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
 
+# The final row is still authoritative when its terminating newline is absent.
+printf 'v0.3.0\tnot-a-commit\tplanned' > "$manifest"
+if "$selector" "$manifest" /dev/null /dev/null > "$output" 2>&1;
+then
+	echo "invalid unterminated maintained-tag entry was ignored" >&2
+	exit 1
+fi
+grep -F "invalid maintained-tag entry" "$output" >/dev/null
+
 tag_repo=$test_root/tag-repository
 git init -q "$tag_repo"
 git -C "$tag_repo" config user.name "Spawn Manager CI"
