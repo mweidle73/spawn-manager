@@ -3,7 +3,6 @@ FROM debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    asciidoctor \
     bash \
     ca-certificates \
     gcc \
@@ -14,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libanet-dev \
     libc6-dev \
     make \
-    ruby-pygments.rb \
+    pandoc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
