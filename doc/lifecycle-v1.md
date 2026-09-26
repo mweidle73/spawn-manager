@@ -100,8 +100,14 @@ descriptor setup, reports pre-exec `errno` through the error pipe and calls
 group supervision.
 
 The manager binds its descriptor ceiling to `/proc/self/fd` only after a
-complete scan. Any open, read or close error selects the finite soft
-descriptor-limit fallback before `fork`.
+complete scan. An open, read or close error with a finite soft descriptor
+limit selects that limit before `fork`. With `RLIM_INFINITY`, the
+implementation consults `sysconf(_SC_OPEN_MAX)` instead; version 1 does not
+claim portable support for an effectively unbounded result. If no usable
+finite ceiling exists and `close_range` is unavailable, the child reports the
+pre-exec `Close_Descriptors` stage instead of proceeding to `execve`. The Work
+Queue retains the missing unlimited-limit fault injection and boundedness
+evidence.
 
 The attached manager signal handler invokes only the synchronized C
 containment hook and immediate OS exit. The pool owns socket-path cleanup after
