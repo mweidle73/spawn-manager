@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           test -s doc/html/index.html
           test -s doc/html/CHANGELOG.html
+          test -s doc/html/WORK_QUEUE.html
           test -s doc/html/protocol-v1.html
           test -s doc/html/lifecycle-v1.html
           test -s doc/html/styles.css
@@ -49,6 +50,8 @@ jobs:
           grep -Fq 'git.codelabs.ch/?p=spawn-manager.git' doc/html/index.html
           grep -Fq '<h1 id="changelog">Changelog</h1>' \
             doc/html/CHANGELOG.html
+          grep -Fq '<h1 id="spawn-manager-work-queue">' \
+            doc/html/WORK_QUEUE.html
           grep -Fq '<h1 id="spawn-manager-protocol-version-1">' \
             doc/html/protocol-v1.html
           grep -Fq '<h1 id="spawn-manager-lifecycle-version-1">' \
@@ -61,6 +64,7 @@ jobs:
                 -e '^https?://' \
                 -e '^mailto:' \
                 -e '^CHANGELOG\.html($|#)' \
+                -e '^WORK_QUEUE\.html($|#)' \
                 -e '^protocol-v1\.html($|#)' \
                 -e '^lifecycle-v1\.html($|#)' \
                 -e '^styles\.css$' ||
