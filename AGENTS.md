@@ -28,6 +28,15 @@ caller and the dedicated process manager.
 - Ada uses three-space indentation and the surrounding GNAT style. Align named
   associations, retain blank lines between declaration groups and logical
   phases, and keep the build warning-free without redundant `use` clauses.
+- Keep each Ada package cohesive and narrowly responsible. The specification
+  is its public contract: expose only what callers need, keep representation
+  and lifecycle helpers private, and split a unit when protocol, transport or
+  process management concerns can no longer be understood independently.
+- Keep Ada procedures and functions short enough that their purpose, main
+  control flow and resource ownership remain visible without scanning through
+  unrelated phases. Extract a named helper when a subprogram develops several
+  independent responsibilities, deeply nested branches or a second resource
+  lifecycle. Prefer semantic structure over an arbitrary line-count target.
 - Give every added or materially changed Ada subprogram declaration an
   immediately adjacent semantic contract comment, including local helpers and
   test specifications. Put a blank line after each declaration/comment pair.
