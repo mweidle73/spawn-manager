@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Check out the GitHub master mirror
+      - name: Check out the GitHub automation policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: master
+          ref: abuild-gh
           fetch-depth: 0
           persist-credentials: true
 
@@ -33,14 +33,16 @@ jobs:
           set -euo pipefail
           upstream_url=https://git.codelabs.ch/git/spawn-manager.git
           upstream_branch=master
+          mirror_ref=refs/remotes/origin/master
           upstream_ref="refs/remotes/upstream/$upstream_branch"
 
+          git fetch --no-tags origin "refs/heads/master:$mirror_ref"
           git fetch --no-tags "$upstream_url" "refs/heads/$upstream_branch:$upstream_ref"
 
-          mirror_sha=$(git rev-parse HEAD)
+          mirror_sha=$(git rev-parse "$mirror_ref")
           upstream_sha=$(git rev-parse "$upstream_ref")
           read -r mirror_only upstream_only <<EOF
-          $(git rev-list --left-right --count "HEAD...$upstream_ref")
+          $(git rev-list --left-right --count "$mirror_ref...$upstream_ref")
           EOF
 
           mirror_tags=$(mktemp)

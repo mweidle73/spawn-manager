@@ -4,6 +4,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 selector=$script_dir/select-maintained-tags.sh
+workflow=$script_dir/../workflows/upstream-monitor.yml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/spawn-maintained-tags.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 
@@ -49,5 +50,14 @@ then
 	exit 1
 fi
 grep -F "invalid entries" "$output" >/dev/null
+
+# The scheduled job needs overlay policy files but must still mirror master.
+grep -F "ref: abuild-gh" "$workflow" >/dev/null
+grep -F "mirror_ref=refs/remotes/origin/master" "$workflow" >/dev/null
+grep -F 'mirror_sha=$(git rev-parse "$mirror_ref")' "$workflow" >/dev/null
+if grep -F 'mirror_sha=$(git rev-parse HEAD)' "$workflow" >/dev/null; then
+	echo "upstream monitor compares its overlay checkout instead of master" >&2
+	exit 1
+fi
 
 echo "Maintained release-tag provenance policy verified"
