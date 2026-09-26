@@ -34,7 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           git show-ref --verify refs/remotes/origin/abuild
-          git merge-base --is-ancestor origin/abuild HEAD
+          if ! git merge-base --is-ancestor origin/abuild HEAD; then
+            echo "GitHub overlay does not contain current origin/abuild." >&2
+            echo "Merge the accepted source tip into the overlay topic." >&2
+            exit 1
+          fi
           unexpected=$(
             git diff --name-only origin/abuild...HEAD |
               grep -Ev '^\.github/' || true
@@ -44,6 +48,10 @@ jobs:
             echo "$unexpected" >&2
             exit 1
           fi
+
+      - name: Verify maintained release-tag policy
+        shell: bash
+        run: .github/ci/test-maintained-tags.sh
 
       - name: Build Spawn Manager and run its unit tests
         shell: bash
