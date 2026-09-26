@@ -155,6 +155,7 @@ integration and its GitHub-specific CI overlay are mirrored at
 ## Authors and licence
 
 Copyright (C) 2011-2026 secunet Security Networks AG
+Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
 
 Authors and contributors include Reto Buerki, Adrian-Ken Rueegsegger, Matthias
 Weidle and Markus Vogt. See [AUTHORS](AUTHORS).

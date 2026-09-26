@@ -71,6 +71,14 @@ Transport deadline checks may win over `POLLNVAL`, changing diagnostic
 specificity but not safety. Add a focused fault injection and reorder only if
 the more precise diagnosis is stable across supported kernels.
 
+### Direct C coverage
+
+The current `make cov` target reports Ada coverage only; the direct POSIX suite
+tests `spawn-posix.c` without coverage instrumentation. Add a dedicated C
+coverage path which retains the wrapped-syscall fault fixtures and disposable
+subprocess isolation, then publish its line and function result separately from
+the Ada report. Do not treat the Ada percentage as evidence for the C core.
+
 Abuild-specific scheduling, real cgroup-provider validation and source
 acquisition remain in Abuild's own plans and work queue. This component queue
 records only the Spawn Manager contract needed by those consumers.
