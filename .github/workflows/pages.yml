@@ -4,14 +4,21 @@ on:
   push:
     branches:
       - abuild-gh
+  pull_request:
+    branches:
+      - abuild-gh
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: >-
+    pages-${{
+      github.event_name == 'pull_request' && github.event.pull_request.number ||
+      'deployment'
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   documentation:
@@ -63,6 +70,7 @@ jobs:
                 -e '^#' \
                 -e '^https?://' \
                 -e '^mailto:' \
+                -e '^index\.html($|#)' \
                 -e '^CHANGELOG\.html($|#)' \
                 -e '^WORK_QUEUE\.html($|#)' \
                 -e '^protocol-v1\.html($|#)' \
