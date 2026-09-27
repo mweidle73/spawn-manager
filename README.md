@@ -65,6 +65,29 @@ For the exact contracts, see:
   timeouts, reaping, `no_new_privs`, cgroup callbacks and failure handling.
 - [`Spawn.Pool`](src/spawn-pool.ads) for the public Ada API.
 
+### Anet boundary
+
+Anet remains the socket-lifecycle abstraction. It creates and owns the Unix
+stream sockets, validates addresses, connects clients, accepts manager
+connections, switches descriptors to nonblocking mode and closes them. Spawn
+Manager also uses Anet's operating-system constants and filesystem utilities.
+
+Frame serialization and exact frame transfer deliberately belong to Spawn
+Manager. Version 1 does not use `Anet.Streams`, Ada record streaming or the
+generic `Anet.Sockets.Send` and `Receive` operations for protocol data. Those
+socket operations each represent one system call, whereas this protocol must
+resume partial reads and writes, distinguish first-byte and completion
+deadlines, handle interruption and backpressure, reject trailing bytes and
+classify peer closure precisely. `Spawn.Transport` therefore operates on the
+descriptor owned by the Anet socket and implements those protocol-specific
+rules with `poll(2)`, `recv(2)` and `send(2)`.
+
+This boundary is intentional rather than a replacement for Anet. A future
+Anet primitive offering the same exact, deadline-bounded nonblocking transfer
+semantics could replace the generic I/O part without changing the version 1
+wire format. Frame layout, validation and protocol failure classification
+would remain Spawn Manager responsibilities.
+
 ## Requirements
 
 Building Spawn Manager requires:
@@ -164,7 +187,7 @@ The maintained branches have distinct roles:
 
 ## Authors and licence
 
-Copyright (C) 2011-2026 secunet Security Networks AG
+Copyright (C) 2011-2026 secunet Security Networks AG<br>
 Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
 
 Authors and contributors include Reto Buerki, Adrian-Ken Rueegsegger, Matthias

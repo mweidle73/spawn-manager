@@ -50,6 +50,7 @@ $(DESTDIR)/protocol-v1.html: protocol-v1.md Makefile | $(DESTDIR)
 		-o $@.tmp $<
 	sed \
 		-e 's|href="../src/spawn-protocol.ads"|href="$(SOURCE_BASE_URL)/src/spawn-protocol.ads"|g' \
+		-e 's|href="../README.md#anet-boundary"|href="index.html#anet-boundary"|g' \
 		$@.tmp > $@
 	rm -f $@.tmp
 
