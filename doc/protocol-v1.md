@@ -147,3 +147,12 @@ after its first received byte each have a fixed five-second monotonic deadline.
 For a finite child timeout, the first result byte is bounded by that timeout
 plus the transport allowance. An unlimited child also has an unlimited
 first-result-byte wait because version 1 has no heartbeat protocol.
+
+Anet owns creation, connection and lifetime of the Unix stream socket. Exact
+frame transfer is implemented by `Spawn.Transport` on its raw descriptor,
+rather than by `Anet.Streams` or the generic one-operation socket I/O calls.
+This split keeps partial-I/O retries, monotonic deadlines, frame bounds and
+protocol error classification in the component which defines them. The
+[project overview](../README.md#anet-boundary) records the rationale and the
+conditions under which a future Anet transport primitive could replace that
+generic I/O machinery.
