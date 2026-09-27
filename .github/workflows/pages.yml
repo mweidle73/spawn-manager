@@ -3,9 +3,11 @@ name: Documentation Pages
 on:
   push:
     branches:
+      - master
       - abuild-gh
   pull_request:
     branches:
+      - master
       - abuild-gh
   workflow_dispatch:
 
@@ -54,7 +56,14 @@ jobs:
           grep -Fq '<title>Ada Spawn Manager</title>' doc/html/index.html
           grep -Fq '<h1 id="ada-spawn-manager">Ada Spawn Manager</h1>' \
             doc/html/index.html
+          grep -Fq 'github.com/mweidle73/spawn-manager' doc/html/index.html
           grep -Fq 'git.codelabs.ch/?p=spawn-manager.git' doc/html/index.html
+          grep -Fq 'spawn-manager/blob/master/src/spawn-pool.ads' \
+            doc/html/index.html
+          if grep -Rq 'spawn-manager/blob/abuild/' doc/html; then
+            echo 'Generated documentation still targets frozen abuild.' >&2
+            exit 1
+          fi
           grep -Fq '<h1 id="changelog">Changelog</h1>' \
             doc/html/CHANGELOG.html
           grep -Fq '<h1 id="spawn-manager-work-queue">' \

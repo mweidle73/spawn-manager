@@ -1,7 +1,7 @@
 DESTDIR ?= html
 PANDOC  ?= pandoc
 
-SOURCE_BASE_URL ?= https://github.com/mweidle73/spawn-manager/blob/abuild
+SOURCE_BASE_URL ?= https://github.com/mweidle73/spawn-manager/blob/master
 
 PANDOC_OPTS = \
 	--from=gfm \

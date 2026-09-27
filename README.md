@@ -168,22 +168,26 @@ with 0.2.0, releases follow normal semantic versioning: compatible fixes
 increment the patch version, new capabilities increment the minor version,
 and an incompatible stable public contract requires a major version change.
 
-## Source repositories
+## Source repository and history
 
-The original repository is available from
-[Codelabs](https://git.codelabs.ch/?p=spawn-manager.git). The maintained Abuild
-integration and its GitHub-specific CI overlay are mirrored at
-[github.com/mweidle73/spawn-manager](https://github.com/mweidle73/spawn-manager).
+The canonical upstream is
+[github.com/mweidle73/spawn-manager][canonical-repository].
+The project was initially developed at
+[Codelabs](https://git.codelabs.ch/?p=spawn-manager.git); that former repository
+location is retained as a redirect and historical point of reference.
 
-The maintained branches have distinct roles:
+[canonical-repository]: https://github.com/mweidle73/spawn-manager
 
-- `master` mirrors the current Codelabs upstream history.
-- `abuild` is the maintained integration line containing every Spawn Manager
-  revision referenced by an Abuild Gitlink. Its tip may move for reviewed
-  tests or documentation without requiring the current Gitlink to move.
-- `abuild-gh` is the GitHub delivery overlay. It contains an accepted `abuild`
-  tip plus GitHub-only files below `.github/`. Advance this published branch
-  through reviewed merges; never reset, rebase or force-push it.
+`master` is the protected development and release branch. The former `abuild`
+integration branch and its `abuild-gh` GitHub CI overlay are frozen at the
+0.2.0 transition and retained so their Gitlinks, reviews and merge history
+remain inspectable.
+
+The imported `add_remove_managers` and `cgroups` branches preserve unmerged
+Codelabs development. `archive/cgroups-caller-placement-wip` preserves the
+later caller-side cgroup-placement prototype which led to the supported
+`Pid_Setup` and `Pid_Reset` callbacks. These branches are historical evidence,
+not maintained APIs or alternatives to `master`.
 
 ## Authors and licence
 

@@ -5,161 +5,135 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 selector=$script_dir/select-maintained-tags.sh
 verifier=$script_dir/verify-maintained-tag.sh
-workflow=$script_dir/../workflows/upstream-monitor.yml
+workflow=$script_dir/../workflows/release-integrity.yml
 ci_workflow=$script_dir/../workflows/ci.yml
 real_manifest=$script_dir/../maintained-release-tags
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/spawn-maintained-tags.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 
 manifest=$test_root/manifest
-mirror=$test_root/mirror
-upstream=$test_root/upstream
+repository_tags=$test_root/repository-tags
 output=$test_root/output
+tab=$(printf '\t')
 
-# Keep the reviewed production manifest in lockstep with its parser and the
-# published annotated tag objects fetched by the CI checkout.
-production_mirror=$test_root/production-mirror
-: > "$production_mirror"
-while IFS=$(printf '\t') read -r tag expected_target state; do
-	if git show-ref --verify --quiet "refs/tags/$tag"; then
-		printf '%s\t%s\n' "$tag" "$(git rev-parse "refs/tags/$tag")" \
-			>> "$production_mirror"
-	fi
-done < "$real_manifest"
-
-verify_production_manifest()
+list_repository_tags()
 {
-	reviewed_manifest=$1
-	"$selector" "$reviewed_manifest" "$production_mirror" /dev/null \
-		> "$output"
-	while IFS=$(printf '\t') read -r tag expected_target tag_source; do
-		test "$tag_source" = origin
-		"$verifier" "$tag" "$expected_target"
-	done < "$output"
-	while IFS=$(printf '\t') read -r tag expected_target state; do
-		if test "$state" = published; then
-			expected_selection=$(printf '%s\t%s\torigin' \
-				"$tag" "$expected_target")
-			grep -F -x "$expected_selection" "$output" >/dev/null
-		fi
-	done < "$reviewed_manifest"
+	git for-each-ref \
+		--format='%(refname:strip=2)%09%(objectname)' refs/tags |
+		LC_ALL=C sort
 }
 
-verify_production_manifest "$real_manifest"
+verify_registry()
+{
+	reviewed_manifest=$1
+	list_repository_tags > "$repository_tags"
+	"$selector" "$reviewed_manifest" "$repository_tags" > "$output"
+	while IFS=$tab read -r tag expected_target expected_object; do
+		"$verifier" "$tag" "$expected_target" "$expected_object"
+	done < "$output"
+}
+
+# Exercise the reviewed production manifest and every published tag object.
+verify_registry "$real_manifest"
 
 # A reviewed future entry remains optional until its tag is published.
 production_with_plan=$test_root/production-with-plan
 cp "$real_manifest" "$production_with_plan"
-printf 'v999.0.0\t%s\tplanned\n' \
+printf 'v999.0.0\t%s\tplanned\t-\n' \
 	3333333333333333333333333333333333333333 >> "$production_with_plan"
-verify_production_manifest "$production_with_plan"
+verify_registry "$production_with_plan"
+if grep -F "v999.0.0" "$output" >/dev/null; then
+	echo "absent planned tag was selected for verification" >&2
+	exit 1
+fi
 
-approved_target=1111111111111111111111111111111111111111
-printf 'v0.1.0\t%s\tplanned\n' "$approved_target" > "$manifest"
-printf 'v0.1.0\tmaintained-object\n' > "$mirror"
-: > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
-test "$(cat "$output")" = \
-	"$(printf 'v0.1.0\t%s\torigin' "$approved_target")"
+target=1111111111111111111111111111111111111111
+tag_object=2222222222222222222222222222222222222222
 
-# An exact upstream tag needs no maintained ownership declaration.
-printf 'v1.0.0\tshared-object\n' > "$mirror"
-printf 'v1.0.0\tshared-object\n' > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+printf 'v0.1.0\t%s\tplanned\t-\n' "$target" > "$manifest"
+: > "$repository_tags"
+"$selector" "$manifest" "$repository_tags" > "$output"
 test ! -s "$output"
 
-# A later release uses the same policy and is checked if it appears upstream
-# before the reviewed GitHub tag is published.
-future_target=2222222222222222222222222222222222222222
-printf 'v0.2.0\t%s\tplanned\n' "$future_target" > "$manifest"
-: > "$mirror"
-printf 'v0.2.0\tupstream-object\n' > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
-test "$(cat "$output")" = \
-	"$(printf 'v0.2.0\t%s\tupstream' "$future_target")"
-
-# Once present on both sides, the mirror copy is the verification source.
-printf 'v0.2.0\tshared-object\n' > "$mirror"
-printf 'v0.2.0\tshared-object\n' > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
-test "$(cat "$output")" = \
-	"$(printf 'v0.2.0\t%s\torigin' "$future_target")"
-
-# A planned tag may be absent; a published tag may not disappear from GitHub.
-: > "$mirror"
-: > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
-test ! -s "$output"
-printf 'v0.2.0\t%s\tpublished\n' "$future_target" > "$manifest"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v0.1.0\t%s\tpublished\t%s\n' \
+	"$target" "$tag_object" > "$manifest"
+if "$selector" "$manifest" "$repository_tags" > "$output" 2>&1;
 then
 	echo "missing published maintained tag was accepted" >&2
 	exit 1
 fi
-grep -F "published maintained tag v0.2.0 is missing" "$output" >/dev/null
+grep -F "published maintained tag v0.1.0 is missing" "$output" \
+	>/dev/null
 
-# An upstream copy must not hide deletion of the published GitHub ref.
-printf 'v0.2.0\tupstream-object\n' > "$upstream"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
-then
-	echo "upstream copy replaced a missing published mirror tag" >&2
-	exit 1
-fi
-grep -F "published maintained tag v0.2.0 is missing" "$output" >/dev/null
-
-printf 'v0.2.0\tmirror-object\n' > "$mirror"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
+printf 'v0.1.0\t%s\n' "$tag_object" > "$repository_tags"
+"$selector" "$manifest" "$repository_tags" > "$output"
 test "$(cat "$output")" = \
-	"$(printf 'v0.2.0\t%s\torigin' "$future_target")"
+	"$(printf 'v0.1.0\t%s\t%s' "$target" "$tag_object")"
 
-# A deleted upstream tag becomes mirror-only and must not be reclassified.
-printf 'v1.0.0\tformer-upstream-object\n' > "$mirror"
-: > "$upstream"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v9.9.9\t%s\n' "$tag_object" >> "$repository_tags"
+if "$selector" "$manifest" "$repository_tags" > "$output" 2>&1;
 then
-	echo "undeclared mirror-only tag was accepted" >&2
+	echo "undeclared repository tag was accepted" >&2
 	exit 1
 fi
-grep -F "v1.0.0 is not declared as maintained" "$output" >/dev/null
+grep -F "repository tag v9.9.9 is not declared" "$output" >/dev/null
 
-printf 'v0.1.0\t%s\tplanned\nv0.1.0\t%s\tplanned\n' \
-	"$approved_target" "$approved_target" > "$manifest"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v0.1.0\t%s\tpublished\t%s\n' \
+	"$target" "$tag_object" > "$manifest"
+printf 'v0.1.0\t%s\tpublished\t%s\n' \
+	"$target" "$tag_object" >> "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
 then
 	echo "duplicate maintained tag was accepted" >&2
 	exit 1
 fi
 grep -F "duplicate entries" "$output" >/dev/null
 
-printf 'v0.2.0-rc1\t%s\tplanned\n' "$approved_target" > "$manifest"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v0.2.0-rc1\t%s\tplanned\t-\n' "$target" > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
 then
 	echo "non-stable maintained tag was accepted" >&2
 	exit 1
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
 
-printf 'v0.2.0\tnot-a-commit\tplanned\n' > "$manifest"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v0.2.0\tnot-a-commit\tplanned\t-\n' > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
 then
 	echo "invalid maintained target was accepted" >&2
 	exit 1
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
 
-printf 'v0.2.0\t%s\tunknown\n' "$approved_target" > "$manifest"
-if "$selector" "$manifest" "$mirror" "$upstream" > "$output" 2>&1;
+printf 'v0.2.0\t%s\tunknown\t-\n' "$target" > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
 then
-	echo "invalid maintained publication state was accepted" >&2
+	echo "invalid maintained state was accepted" >&2
 	exit 1
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
 
-# The final row is still authoritative when its terminating newline is absent.
-printf 'v0.3.0\tnot-a-commit\tplanned' > "$manifest"
-if "$selector" "$manifest" /dev/null /dev/null > "$output" 2>&1;
+printf 'v0.2.0\t%s\tplanned\t%s\n' \
+	"$target" "$tag_object" > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
 then
-	echo "invalid unterminated maintained-tag entry was ignored" >&2
+	echo "planned tag with reserved object was accepted" >&2
+	exit 1
+fi
+grep -F "invalid maintained-tag object" "$output" >/dev/null
+
+printf 'v0.2.0\t%s\tpublished\t-' "$target" > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
+then
+	echo "published tag without object was accepted" >&2
+	exit 1
+fi
+grep -F "invalid maintained-tag object" "$output" >/dev/null
+
+printf 'v0.3.0\tnot-a-commit\tplanned\t-' > "$manifest"
+if "$selector" "$manifest" /dev/null > "$output" 2>&1;
+then
+	echo "invalid unterminated manifest row was ignored" >&2
 	exit 1
 fi
 grep -F "invalid maintained-tag entry" "$output" >/dev/null
@@ -171,36 +145,32 @@ git -C "$tag_repo" config user.email "spawn-manager@example.invalid"
 git -C "$tag_repo" commit -q --allow-empty -m "approved target"
 approved_target=$(git -C "$tag_repo" rev-parse HEAD)
 git -C "$tag_repo" tag -a v0.1.0 -m "approved annotation"
+approved_object=$(git -C "$tag_repo" rev-parse refs/tags/v0.1.0)
 (
 	cd "$tag_repo"
-	"$verifier" v0.1.0 "$approved_target"
+	"$verifier" v0.1.0 "$approved_target" "$approved_object"
 )
+
+# Rewriting only the annotation must fail even when the target stays fixed.
+git -C "$tag_repo" tag -f -a v0.1.0 -m "rewritten annotation" \
+	"$approved_target" >/dev/null
+if (
+	cd "$tag_repo"
+	"$verifier" v0.1.0 "$approved_target" "$approved_object"
+) > "$output" 2>&1; then
+	echo "rewritten maintained annotation was accepted" >&2
+	exit 1
+fi
+grep -F "expected $approved_object from the release registry" "$output" \
+	>/dev/null
 
 git -C "$tag_repo" commit -q --allow-empty -m "wrong target"
 git -C "$tag_repo" tag -f -a v0.1.0 -m "moved annotation" >/dev/null
 if (
 	cd "$tag_repo"
-	"$verifier" v0.1.0 "$approved_target"
+	"$verifier" v0.1.0 "$approved_target" -
 ) > "$output" 2>&1; then
 	echo "moved maintained tag was accepted" >&2
-	exit 1
-fi
-grep -F "expected $approved_target" "$output" >/dev/null
-
-# An upstream-first future tag is selected and then rejected on a wrong target.
-git -C "$tag_repo" tag -a v0.2.0 -m "wrong upstream annotation"
-printf 'v0.2.0\t%s\tplanned\n' "$approved_target" > "$manifest"
-: > "$mirror"
-printf 'v0.2.0\tupstream-tag-object\n' > "$upstream"
-"$selector" "$manifest" "$mirror" "$upstream" > "$output"
-IFS=$(printf '\t') read -r selected_tag selected_target selected_source \
-	< "$output"
-test "$selected_source" = upstream
-if (
-	cd "$tag_repo"
-	"$verifier" "$selected_tag" "$selected_target"
-) > "$output" 2>&1; then
-	echo "wrong upstream-first maintained tag was accepted" >&2
 	exit 1
 fi
 grep -F "expected $approved_target" "$output" >/dev/null
@@ -208,36 +178,43 @@ grep -F "expected $approved_target" "$output" >/dev/null
 git -C "$tag_repo" tag -f v0.1.0 "$approved_target" >/dev/null
 if (
 	cd "$tag_repo"
-	"$verifier" v0.1.0 "$approved_target"
+	"$verifier" v0.1.0 "$approved_target" -
 ) > "$output" 2>&1; then
 	echo "lightweight maintained tag was accepted" >&2
 	exit 1
 fi
 grep -F "is not annotated" "$output" >/dev/null
 
-blob_target=$(printf 'not a commit\n' | git -C "$tag_repo" hash-object -w --stdin)
-git -C "$tag_repo" tag -f -a v0.1.0 -m "blob target" "$blob_target" \
-	>/dev/null
+blob_target=$(printf 'not a commit\n' |
+	git -C "$tag_repo" hash-object -w --stdin)
+git -C "$tag_repo" tag -f -a v0.1.0 -m "blob target" \
+	"$blob_target" >/dev/null
 if (
 	cd "$tag_repo"
-	"$verifier" v0.1.0 "$blob_target"
+	"$verifier" v0.1.0 "$blob_target" -
 ) > "$output" 2>&1; then
 	echo "maintained tag with non-commit target was accepted" >&2
 	exit 1
 fi
 grep -F "does not target a commit" "$output" >/dev/null
 
-# The scheduled job needs overlay policy files but must still mirror master.
-grep -F "ref: abuild-gh" "$workflow" >/dev/null
-grep -F "mirror_ref=refs/remotes/origin/master" "$workflow" >/dev/null
-grep -F 'mirror_sha=$(git rev-parse "$mirror_ref")' "$workflow" >/dev/null
-grep -F 'while IFS=$'"'"'\t'"'"' read -r tag expected_target tag_source' \
-	"$workflow" >/dev/null
-if grep -F 'mirror_sha=$(git rev-parse HEAD)' "$workflow" >/dev/null; then
-	echo "upstream monitor compares its overlay checkout instead of master" >&2
+# The scheduled workflow is read-only and verifies canonical master directly.
+grep -F "ref: master" "$workflow" >/dev/null
+grep -F "permissions:" "$workflow" >/dev/null
+grep -F "contents: read" "$workflow" >/dev/null
+grep -F "select-maintained-tags.sh" "$workflow" >/dev/null
+grep -F "verify-maintained-tag.sh" "$workflow" >/dev/null
+if grep -F "contents: write" "$workflow" >/dev/null ||
+   grep -Fi "codelabs" "$workflow" >/dev/null; then
+	echo "release integrity workflow still synchronizes an external remote" >&2
 	exit 1
 fi
-grep -F "overlay does not contain current origin/abuild" "$ci_workflow" \
-	>/dev/null
 
-echo "Maintained release-tag provenance policy verified"
+grep -F -- "- master" "$ci_workflow" >/dev/null
+grep -F -- "- abuild-gh" "$ci_workflow" >/dev/null
+if grep -F "GitHub-only overlay" "$ci_workflow" >/dev/null; then
+	echo "canonical CI still enforces the former overlay boundary" >&2
+	exit 1
+fi
+
+echo "Maintained release-tag integrity policy verified"

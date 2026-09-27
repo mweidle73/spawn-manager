@@ -126,14 +126,15 @@ caller and the dedicated process manager.
 
 ## Branch and release policy
 
-- `master` mirrors the Codelabs upstream. `abuild` is the maintained
-  integration line containing every revision referenced by an Abuild Gitlink;
-  its tip may also advance for reviewed tests or documentation. `abuild-gh`
-  contains an accepted `abuild` tip and may differ from it only below
-  `.github/`.
-- Advance the published `abuild-gh` branch only through a reviewed merge which
-  retains the accepted `abuild` ancestry and GitHub overlay history. Never
-  reset, rebase or force-push `abuild-gh`.
+- `master` is the protected canonical upstream and the only branch for new
+  development and releases. Change it through reviewed pull requests; never
+  rebase or force-push its published history.
+- `abuild` records the final separate Abuild integration line through release
+  0.2.0. `abuild-gh` records the former GitHub CI overlay and its reviewed
+  merge history. Both branches are frozen historical references; do not base
+  new work on them or advance them.
+- Preserve imported historical branches without rebasing or rewriting them.
+  Their APIs are evidence, not supported alternatives to `master`.
 - Component releases use annotated stable tags named `vMAJOR.MINOR.PATCH`.
   Pure test or documentation changes do not require a release tag.
 - Historical 0.1.x tags follow Abuild's maintained Gitlink sequence even where
