@@ -26,12 +26,33 @@ while IFS=$(printf '\t') read -r tag expected_target state; do
 			>> "$production_mirror"
 	fi
 done < "$real_manifest"
-"$selector" "$real_manifest" "$production_mirror" /dev/null > "$output"
-while IFS=$(printf '\t') read -r tag expected_target tag_source; do
-	test "$tag_source" = origin
-	"$verifier" "$tag" "$expected_target"
-done < "$output"
-test "$(wc -l < "$output")" -eq "$(wc -l < "$real_manifest")"
+
+verify_production_manifest()
+{
+	reviewed_manifest=$1
+	"$selector" "$reviewed_manifest" "$production_mirror" /dev/null \
+		> "$output"
+	while IFS=$(printf '\t') read -r tag expected_target tag_source; do
+		test "$tag_source" = origin
+		"$verifier" "$tag" "$expected_target"
+	done < "$output"
+	while IFS=$(printf '\t') read -r tag expected_target state; do
+		if test "$state" = published; then
+			expected_selection=$(printf '%s\t%s\torigin' \
+				"$tag" "$expected_target")
+			grep -F -x "$expected_selection" "$output" >/dev/null
+		fi
+	done < "$reviewed_manifest"
+}
+
+verify_production_manifest "$real_manifest"
+
+# A reviewed future entry remains optional until its tag is published.
+production_with_plan=$test_root/production-with-plan
+cp "$real_manifest" "$production_with_plan"
+printf 'v999.0.0\t%s\tplanned\n' \
+	3333333333333333333333333333333333333333 >> "$production_with_plan"
+verify_production_manifest "$production_with_plan"
 
 approved_target=1111111111111111111111111111111111111111
 printf 'v0.1.0\t%s\tplanned\n' "$approved_target" > "$manifest"
