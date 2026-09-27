@@ -164,7 +164,7 @@ The maintained branches have distinct roles:
 
 ## Authors and licence
 
-Copyright (C) 2011-2026 secunet Security Networks AG
+Copyright (C) 2011-2026 secunet Security Networks AG<br>
 Copyright (C) 2012-2016 Reto Buerki <reet@codelabs.ch>
 
 Authors and contributors include Reto Buerki, Adrian-Ken Rueegsegger, Matthias
