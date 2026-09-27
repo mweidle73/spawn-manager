@@ -29,7 +29,7 @@ execution core. There is no intermediate `spawn_wrapper` process.
 
 ## Status and platform
 
-The next release is **0.2.0**. It introduces structured execution while
+The current release is **0.2.0**. It introduces structured execution while
 retaining the existing shell API. The release contents are collected in the
 [changelog](CHANGELOG.md); accepted later work is tracked in the
 [work queue](WORK_QUEUE.md).
