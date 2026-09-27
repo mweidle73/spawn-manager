@@ -16,9 +16,22 @@ mirror=$test_root/mirror
 upstream=$test_root/upstream
 output=$test_root/output
 
-# Keep the reviewed production manifest in lockstep with its parser.
-"$selector" "$real_manifest" /dev/null /dev/null > "$output"
-test ! -s "$output"
+# Keep the reviewed production manifest in lockstep with its parser and the
+# published annotated tag objects fetched by the CI checkout.
+production_mirror=$test_root/production-mirror
+: > "$production_mirror"
+while IFS=$(printf '\t') read -r tag expected_target state; do
+	if git show-ref --verify --quiet "refs/tags/$tag"; then
+		printf '%s\t%s\n' "$tag" "$(git rev-parse "refs/tags/$tag")" \
+			>> "$production_mirror"
+	fi
+done < "$real_manifest"
+"$selector" "$real_manifest" "$production_mirror" /dev/null > "$output"
+while IFS=$(printf '\t') read -r tag expected_target tag_source; do
+	test "$tag_source" = origin
+	"$verifier" "$tag" "$expected_target"
+done < "$output"
+test "$(wc -l < "$output")" -eq "$(wc -l < "$real_manifest")"
 
 approved_target=1111111111111111111111111111111111111111
 printf 'v0.1.0\t%s\tplanned\n' "$approved_target" > "$manifest"
