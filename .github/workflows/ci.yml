@@ -3,9 +3,11 @@ name: Trixie CI
 on:
   push:
     branches:
+      - master
       - abuild-gh
   pull_request:
     branches:
+      - master
       - abuild-gh
   workflow_dispatch:
 
@@ -28,26 +30,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Verify the GitHub-only overlay
-        shell: bash
-        run: |
-          set -euo pipefail
-          git show-ref --verify refs/remotes/origin/abuild
-          if ! git merge-base --is-ancestor origin/abuild HEAD; then
-            echo "GitHub overlay does not contain current origin/abuild." >&2
-            echo "Merge the accepted source tip into the overlay topic." >&2
-            exit 1
-          fi
-          unexpected=$(
-            git diff --name-only origin/abuild...HEAD |
-              grep -Ev '^\.github/' || true
-          )
-          if test -n "$unexpected"; then
-            echo "abuild-gh contains changes outside .github/:" >&2
-            echo "$unexpected" >&2
-            exit 1
-          fi
 
       - name: Verify maintained release-tag policy
         shell: bash

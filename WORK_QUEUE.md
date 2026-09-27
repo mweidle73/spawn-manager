@@ -17,6 +17,19 @@ define acceptance evidence before starting an item.
 
 ## Accepted follow-ups
 
+### Neutral GitHub organization
+
+The canonical repository initially remains under its current personal GitHub
+namespace so the Codelabs redirect and upstream transition do not depend on a
+new governance decision. Reconsider a transfer to a neutral project
+organization after its permanent name, repository scope and at least two
+trusted organization owners are confirmed.
+
+Before a transfer, inventory repository and Pages URLs, Actions permissions,
+installed review applications, Dependabot, secrets and branch and tag rules.
+Afterward, republish Pages, update the Codelabs redirect and verify web, clone,
+fetch, CI and release access through both the old and new repository URLs.
+
 ### Shared output sink and Abuild `make` migration
 
 Exec V1 has independent null-or-truncate stdout and stderr streams. Pointing

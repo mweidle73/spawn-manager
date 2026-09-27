@@ -16,6 +16,13 @@ Gitlink even when the two Spawn Manager commits are not direct ancestors.
 
 ## [Unreleased]
 
+### Changed
+
+- Established the maintained GitHub repository and its protected `master`
+  branch as the canonical upstream. Retained the former Codelabs development,
+  Abuild integration and GitHub overlay branches as frozen history.
+- Replaced Codelabs synchronization with local release-tag integrity checks.
+
 ## [0.2.0] - 2026-09-27
 
 ### Added

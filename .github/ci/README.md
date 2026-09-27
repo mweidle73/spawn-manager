@@ -1,20 +1,13 @@
 # Spawn Manager GitHub CI environment
 
-This repository is a GitHub mirror/fork of Spawn Manager from
-[codelabs.ch](https://www.codelabs.ch/). The GitHub-only `abuild-gh` branch
-extends the maintained Abuild integration line with CI configuration. The
-three long-lived branches have distinct roles:
+This repository is the canonical Spawn Manager upstream. The project was
+initially developed at [codelabs.ch](https://www.codelabs.ch/); its imported
+branches remain available as historical evidence.
 
-- `master` mirrors the Codelabs upstream repository.
-- `abuild` contains every Spawn Manager revision pinned by an Abuild Gitlink;
-  its tip may also include reviewed test or documentation follow-ups.
-- `abuild-gh` contains an accepted `abuild` tip and adds only files below
-  `.github/` relative to it.
-
-Advance the published `abuild-gh` branch only by merging a reviewed overlay
-topic which already contains the accepted `abuild` tip. Never reset, rebase or
-force-push `abuild-gh`; preserving its merge history keeps earlier GitHub
-changes and reviews inspectable.
+`master` is the protected development and release branch. The former `abuild`
+integration line and `abuild-gh` GitHub overlay are frozen at the 0.2.0
+transition. They retain earlier Gitlinks, reviews and overlay merge history,
+but receive no new development or releases.
 
 The `run` helper builds a minimal Debian Trixie image and starts it as the
 invoking host user. Its root filesystem is read-only, its network is disabled
@@ -59,32 +52,23 @@ Set `SPAWN_CI_IMAGE` to override the local image name,
 `DOCKER_PLATFORM` to override the default `linux/amd64` platform, and
 `SPAWN_CI_NETWORK` to override the default `none` network mode.
 
-The weekly upstream monitor compares `master` and every Codelabs-owned tag ref
-with Codelabs. It mirrors those authoritative upstream tag objects exactly,
-regardless of whether they represent an Abuild release.
-
-Annotated stable semantic-version tags maintained for the Abuild integration
-may exist only on GitHub when their exact names, peeled target commits and
-`planned` or `published` states are declared in
-`.github/maintained-release-tags`. The workflow never synthesizes or rewrites
-a tag object. It preserves GitHub-only tags and may copy a declared
-upstream-first tag object to GitHub after validating its annotation and target.
-If a declared name already exists on both remotes, the complete annotated tag
-objects must match; equal peeled commits do not excuse different release
-annotations. A planned tag may be absent. A published tag must remain on
-GitHub. An undeclared mirror-only tag, lightweight tag or mismatched target
-blocks the sync. An upstream copy cannot hide deletion of a published GitHub
-tag.
+The weekly release-integrity workflow verifies every repository tag against
+`.github/maintained-release-tags`. Each published row pins the stable semantic
+version, peeled target commit and complete annotated tag object. A planned tag
+may be absent; a published tag must remain present and byte-identical. The
+workflow never creates, updates or deletes refs.
 
 The manifest remains the release registry after the reconstructed 0.1.x
-history. For each later release, including `v0.2.0`, use this order:
+history. For each later release use this order:
 
-1. Finalize the source release commit and changelog on `abuild`.
-2. Add the stable tag name, that commit's full object ID and state `planned` to
-   `.github/maintained-release-tags` on `abuild-gh`, then review and merge the
-   policy change.
+1. Finalize the source release commit and changelog on `master`.
+2. Add the stable tag name, that commit's full object ID, state `planned` and
+   tag-object placeholder `-` to `.github/maintained-release-tags`, then review
+   and merge the policy change.
 3. Create and publish the annotated tag at exactly that source commit.
-4. Change its manifest state to `published` in a reviewed follow-up. That
-   state makes later deletion a synchronization failure.
+4. Change its manifest state to `published` and replace `-` with the annotated
+   tag object's full ID in a reviewed follow-up. That state makes later
+   deletion or rewriting an integrity failure.
 
-Do not reserve a placeholder object ID before the release commit is final.
+Do not reserve a target commit before the release commit is final, and do not
+guess the annotated tag object before it has been created.
