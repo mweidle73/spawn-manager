@@ -22,7 +22,10 @@ caller and the dedicated process manager.
 - Read `doc/lifecycle-v1.md` when changing processes, descriptors, signals,
   timeouts, cancellation, cgroup callbacks or pool cleanup.
 - Update `CHANGELOG.md` for user- or integrator-visible changes. Keep planned
-  release work under `Unreleased` until the release tag is created.
+  work under `Unreleased` until preparing the final release commit. Move it
+  under the dated version in that commit immediately before creating the
+  annotated tag; if publication is abandoned, restore `Unreleased` rather
+  than leaving a release entry without its tag.
 
 ## Development
 

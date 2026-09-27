@@ -16,7 +16,7 @@ Gitlink even when the two Spawn Manager commits are not direct ancestors.
 
 ## [Unreleased]
 
-The changes below are planned for version 0.2.0.
+## [0.2.0] - 2026-09-27
 
 ### Added
 
@@ -55,6 +55,8 @@ The changes below are planned for version 0.2.0.
   reaping with monotonic deadlines.
 - Documented the protocol and lifecycle contracts separately from the project
   overview.
+- Documented the intentional Anet boundary: Anet owns Unix socket lifecycle,
+  while Spawn Manager owns versioned wire encoding and exact frame transfer.
 
 ### Fixed
 
