@@ -5,15 +5,15 @@ structured-execution delivery. It records concrete consumers and known
 boundaries without silently extending protocol version 1. Assign a ticket and
 define acceptance evidence before starting an item.
 
-## Release 0.2.0 gates
+## Post-0.2.0 validation
 
 - Complete the remaining native performance measurements on every release
   architecture and retain paired shell, structured-manager and direct-core
   medians.
-- Review and publish the reconstructed annotated 0.1.x tags, then close the
-  `Unreleased` changelog section and create the annotated `v0.2.0` tag.
-- Verify the final Spawn Manager revision through Abuild's recursive checkout,
-  archive, install, reference-product and user-interrupt system tests.
+- Continue validating the released revision through Abuild's recursive
+  checkout, archive, install, reference-product and user-interrupt system
+  tests. Record any discovered defect for a patch release rather than moving
+  the version 1 contract silently.
 
 ## Accepted follow-ups
 
