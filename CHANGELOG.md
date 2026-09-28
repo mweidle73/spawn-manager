@@ -16,6 +16,11 @@ Gitlink even when the two Spawn Manager commits are not direct ancestors.
 
 ## [Unreleased]
 
+### Added
+
+- Added public contribution guidance and a private vulnerability-reporting
+  security policy for the canonical upstream.
+
 ### Changed
 
 - Established the maintained GitHub repository and its protected `master`
