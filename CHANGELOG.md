@@ -20,6 +20,7 @@ Gitlink even when the two Spawn Manager commits are not direct ancestors.
 
 - Added public contribution guidance and a private vulnerability-reporting
   security policy for the canonical upstream.
+- Added lightweight issue and pull-request templates for public contributions.
 
 ### Changed
 

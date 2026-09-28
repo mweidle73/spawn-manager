@@ -1,0 +1,33 @@
+name: Feature or design proposal
+description: Propose a new capability or a change to an existing contract
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: >-
+        Describe the concrete need rather than only the desired solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe how Spawn Manager should address the need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: |
+        Mention effects on the API, protocol, shell behavior, process lifecycle,
+        privileges or signals, when known.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include alternatives when they help explain the proposal.
