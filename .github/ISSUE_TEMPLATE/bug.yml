@@ -1,0 +1,56 @@
+name: Bug report
+description: Report incorrect or unexpected Spawn Manager behavior
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose potential security vulnerabilities here. Report them
+        through GitHub private vulnerability reporting:
+
+        https://github.com/mweidle73/spawn-manager/security/advisories/new
+
+  - type: input
+    id: version
+    attributes:
+      label: Affected version or commit
+      description: For example, v0.2.0 or a full commit ID.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Describe what happened, including the relevant result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >-
+        Provide the smallest useful sequence which reproduces the issue.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: >-
+        Include the Linux distribution, kernel or compiler when relevant.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional logs or context
+      description: Remove credentials, private keys and unrelated private data.
